@@ -1,9 +1,8 @@
 # Install and load necessary packages if you haven't already
 # install.packages(c("duckplyr", "dplyr", "duckdb"))
 
+library(tidyverse)
 library(duckplyr)
-library(dplyr)
-library(duckdb) # We load duckdb as its DBI functions are useful for configuration
 
 # --- 1. Configuration: Set S3 path and AWS Region ---
 
@@ -54,41 +53,8 @@ DBI::dbExecute(con, paste0("SET s3_region = '", AWS_REGION, "';"))
 # Use read_csv_duckdb() to create a lazy data frame from the S3 URI.
 # The data is not loaded into R's memory yet; only the schema is read.
 # Use the 'options' argument to pass any DuckDB specific CSV reader options (e.g., delimiter, header, etc.)
-lazy_s3_data <- read_csv_duckdb(
+sentiment_data <- read_csv_duckdb(
   path = S3_BUCKET_PATH,
   options = list(header = TRUE, delim = ",", auto_detect = TRUE)
 )
-
-# --- 4. Query the data using dplyr/duckplyr functions ---
-
-# The operations are translated into a single, efficient SQL query by DuckDB
-# and executed against the data on S3 (predicate pushdown/column projection is utilized).
-query_result <- lazy_s3_data %>%
-  # Example: Filter rows where 'column_A' is greater than 10
-  filter(column_A > 10) %>%
-  # Example: Select and rename columns
-  select(
-    id = column_B,
-    value = column_C
-  ) %>%
-  # Example: Group and summarize
-  group_by(id) %>%
-  summarise(
-    avg_value = mean(value, na.rm = TRUE),
-    count = n()
-  ) %>%
-  # Example: Order the final result
-  arrange(desc(avg_value))
-
-# --- 5. Retrieve the results (Materialize) ---
-
-# The query is only executed and the results are returned to R's memory
-# when you use a function that forces materialization, like 'collect()' or 'print()'.
-final_data_frame <- query_result %>%
-  collect()
-
-# Print the final result
-print(final_data_frame)
-
-# Clean up the connection (optional, but good practice)
-DBI::dbDisconnect(con, shutdown = TRUE)
+sentiment_data

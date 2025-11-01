@@ -2,6 +2,7 @@
 library(tidyverse)
 library(duckplyr)
 library(yahoofinancer)
+library(lubridate)
 
 # READ AND PROCESS SENTIMENT DATA ==============================
 # read parquet file
@@ -36,27 +37,19 @@ load_data <- function() {
   summarise(sentiments, n = n())
   return(sentiments)
 }
-sentiments <- load_data()
-summarise(sentiments, n = n())
+
+# START PROCESSING ==============================
+sentiments_raw <- load_data()
+nrow(sentiments_raw)
 cat("Limiting data to active users and popular tickers...\n")
 # limit rows to users with at least 200 entries over at least 180 days in the most popular tickers
-MIN_POSTS <- 200
+MIN_POSTS <- 100
 MIN_DAYS <- 180 # were they active over at least 6 months
 NUM_TICKERS <- 500
-sentiments <- sentiments |>
+sentiments <- sentiments_raw |>
   # when people post multiple messages about the same ticker on the same day, filter out.
-  distinct(user_id, ticker, date, bullish, .keep_all = TRUE) |>
-  # only include user_ids with at least 200 entries
-  summarise(
-    .by = user_id,
-    date_range = max(date) - min(date),
-    count = n()
-  ) |>
-  filter(count >= MIN_POSTS, date_range >= MIN_DAYS) |>
-  select(user_id) |>
-  inner_join(sentiments, by = "user_id")
-
-summarise(sentiments, n = n())
+  distinct(user_id, ticker, date, bullish, .keep_all = TRUE)
+nrow(sentiments)
 
 # include only the most popular tickers
 sentiments <- sentiments |>
@@ -66,7 +59,34 @@ sentiments <- sentiments |>
   select(-count) |>
   inner_join(sentiments, by = "ticker")
 
-summarise(sentiments, n = n())
+nrow(sentiments)
+
+# only include user_ids with at least 200 entries
+sentiments <- sentiments |>
+  summarise(
+    .by = user_id,
+    date_range = max(date) - min(date),
+    count = n()
+  ) |>
+  inner_join((sentiments), by = "user_id")
+nrow(sentiments)
+
+sentiments <- sentiments |>
+  filter(count >= MIN_POSTS, date_range >= MIN_DAYS) |>
+  select(-date_range, -count)
+
+nrow(sentiments)
+
+user_stats <- sentiments |>
+  summarise(
+    .by = user_id,
+    date_range_days = as.integer(max(date) - min(date)),
+    years_active = date_range_days / 365.25,
+    count = n(),
+    unique_tickers = n_distinct(ticker)
+  )
+
+print(user_stats)
 
 # PRICING DATA DOWNLOAD AND PROCESSING ==============================
 # function to get historical prices for a ticker from yahoofinancer
@@ -131,8 +151,7 @@ if (download_prices) {
 }
 
 
-prices_df |>
-  summarise(n = n())
+prices_df |> summarise(n = n())
 
 # find number of unique tickers
 prices_df |>
@@ -184,14 +203,14 @@ prices_change <- prices_change |>
 cat("Calculating user track records...\n")
 track_record <- sentiments |>
   left_join(prices_change, by = c("ticker", "date")) |>
-  filter(!is.na(pct_change_5d)) |>
+  na.omit() |>
   # add true/false column for whether pct_change_5d  has the same sign as sentiment
   mutate(
-    win_absolute = bullish == (pct_change_5d > 0) #,
-    # win_vs_SPY = bullish == (pct_change_minus_spy > 0)
+    win_absolute = bullish == (pct_change_5d > 0),
+    win_vs_SPY = bullish == (pct_change_minus_spy > 0)
   ) |>
-  select(user_id, ticker, date, bullish, win_absolute)
-# select(user_id, ticker, date, bullish, win_absolute, win_vs_SPY)
+  #  select(user_id, ticker, date, bullish, win_absolute)
+  select(user_id, ticker, date, bullish, win_absolute, win_vs_SPY)
 
 # compute win rate by user_id
 user_win_rate <- track_record |>
@@ -199,10 +218,11 @@ user_win_rate <- track_record |>
     .by = user_id,
     total = n(),
     wins_absolute = sum(win_absolute),
-    # wins_vs_SPY = sum(win_vs_SPY),
-    # win_rate_vs_spy = sum(win_vs_SPY) / n(),
+    wins_vs_SPY = sum(win_vs_SPY),
+    win_rate_vs_spy = sum(win_vs_SPY) / n(),
     win_rate = sum(win_absolute) / n()
   ) |>
   arrange(desc(win_rate))
 
+methods_restore()
 print(user_win_rate)

@@ -5,8 +5,7 @@ library(tidyverse)
 # H0: p = 0.5 (random chance)
 # H1: p ≠ 0.5 (not random chance)
 
-results <- user_win_rate |>
-  as_tibble() |>
+results_absolute <- user_win_rate |>
   rowwise() |>
   mutate(
     # Perform two-sided binomial test
@@ -24,8 +23,27 @@ results <- user_win_rate |>
   select(-binom_test) |>
   arrange(p_value)
 
-# Show all results
-results
+results_relative <- user_win_rate |>
+  rowwise() |>
+  mutate(
+    # Perform two-sided binomial test
+    binom_test = list(binom.test(
+      wins_vs_SPY,
+      total,
+      p = 0.5,
+      alternative = "two.sided"
+    )),
+    p_value = binom_test$p.value,
+    conf_low = binom_test$conf.int[1],
+    conf_high = binom_test$conf.int[2]
+  ) |>
+  ungroup() |>
+  select(-binom_test) |>
+  arrange(p_value)
+
+
+# Show all results, absolute or vs SPY
+results <- results_relative
 
 # Filter for statistically significant results (p < 0.05)
 significant_users <- results |>
@@ -42,7 +60,7 @@ cat(
   "Users with win rates statistically different from random chance (p < 0.05):\n\n"
 )
 significant_users |>
-  select(user_id, total, wins, win_rate, p_value, direction) |>
+  select(user_id, total, wins_absolute, win_rate, p_value, direction) |>
   print()
 
 cat("\nSummary:\n")

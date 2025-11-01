@@ -1,11 +1,12 @@
 # test for skill
 library(tidyverse)
+library(gt)
 
 # Perform binomial tests for each user
 # H0: p = 0.5 (random chance)
 # H1: p ≠ 0.5 (not random chance)
 
-results_absolute <- user_win_rate |>
+results <- user_win_rate |>
   rowwise() |>
   mutate(
     # Perform two-sided binomial test
@@ -15,19 +16,7 @@ results_absolute <- user_win_rate |>
       p = 0.5,
       alternative = "two.sided"
     )),
-    p_value = binom_test$p.value,
-    conf_low = binom_test$conf.int[1],
-    conf_high = binom_test$conf.int[2]
-  ) |>
-  ungroup() |>
-  select(-binom_test) |>
-  arrange(p_value)
-
-results_relative <- user_win_rate |>
-  rowwise() |>
-  mutate(
-    # Perform two-sided binomial test
-    binom_test = list(binom.test(
+    binom_test_rel = list(binom.test(
       wins_vs_SPY,
       total,
       p = 0.5,
@@ -35,48 +24,73 @@ results_relative <- user_win_rate |>
     )),
     p_value = binom_test$p.value,
     conf_low = binom_test$conf.int[1],
-    conf_high = binom_test$conf.int[2]
+    conf_high = binom_test$conf.int[2],
+    p_value_rel = binom_test_rel$p.value,
+    conf_low_rel = binom_test_rel$conf.int[1],
+    conf_high_rel = binom_test_rel$conf.int[2]
   ) |>
   ungroup() |>
-  select(-binom_test) |>
+  select(-binom_test, -binom_test_rel, -starts_with("conf")) |>
   arrange(p_value)
 
-
-# Show all results, absolute or vs SPY
-results <- results_relative
-
 # Filter for statistically significant results (p < 0.05)
-significant_users <- results |>
-  filter(p_value < 0.05) |>
+significant_posters <- results |>
+  filter(p_value_rel < 0.05) |>
   mutate(
     direction = case_when(
-      win_rate > 0.5 ~ "Above chance",
-      win_rate < 0.5 ~ "Below chance",
+      win_rate_vs_spy > 0.5 ~ "Above chance",
+      win_rate_vs_spy < 0.5 ~ "Below chance",
       TRUE ~ "At chance"
     )
   )
 
 cat(
-  "Users with win rates statistically different from random chance (p < 0.05):\n\n"
+  "posters with win rates statistically different from random chance (p < 0.05):\n\n"
 )
-significant_users |>
+significant_posters |>
   select(user_id, total, wins_absolute, win_rate, p_value, direction) |>
   print()
 
 cat("\nSummary:\n")
-cat(paste("Total users tested:", nrow(results), "\n"))
+cat(paste("Total posters tested:", nrow(results), "\n"))
 cat(paste(
-  "Users significantly different from chance:",
-  nrow(significant_users),
+  "posters significantly different from chance:",
+  nrow(significant_posters),
   "\n"
 ))
 cat(paste(
-  "Users significantly above chance (win_rate > 0.5):",
-  sum(significant_users$direction == "Above chance"),
+  "posters significantly above chance (win_rate > 0.5):",
+  sum(significant_posters$direction == "Above chance"),
   "\n"
 ))
 cat(paste(
-  "Users significantly below chance (win_rate < 0.5):",
-  sum(significant_users$direction == "Below chance"),
+  "posters significantly below chance (win_rate < 0.5):",
+  sum(significant_posters$direction == "Below chance"),
   "\n"
 ))
+
+# make a table of the summary using gt
+summary_table <- tibble(
+  Metric = c(
+    "Total posters tested",
+    "posters significantly different from chance",
+    "posters significantly above chance (win_rate > 0.5)",
+    "posters significantly below chance (win_rate < 0.5)"
+  ),
+  Count = c(
+    nrow(results),
+    nrow(significant_posters),
+    sum(significant_posters$direction == "Above chance"),
+    sum(significant_posters$direction == "Below chance")
+  )
+)
+summary_table |>
+  gt() |>
+  tab_header(
+    title = "Summary of User Win Rate Statistical Tests"
+  ) |>
+  fmt_number(
+    columns = c(Count),
+    decimals = 0
+  ) |>
+  print()

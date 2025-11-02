@@ -37,7 +37,7 @@ ticker_hist <- function(ticker, start_date, end_date, interval_pd = "1d") {
 
 
 # download prices for popular tickers
-download_prices <- TRUE
+download_prices <- FALSE
 if (download_prices) {
   cat("Downloading price data for popular tickers...\n")
   # get date range for popular tickers
@@ -149,10 +149,16 @@ track_record <- sentiments |>
   select(user_id, ticker, date, bullish, win_absolute, win_vs_SPY) |>
   filter(!is.na(win_absolute) & !is.na(win_vs_SPY))
 
+track_record_bull <- track_record |>
+  filter(bullish)
+track_record_bear <- track_record |>
+  filter(!bullish)
+
 # compute win rate by user_id
 # filter to users with at least 100 posts about the 500 most popular tickers
-user_win_rate <- track_record |>
-  summarise(
+get_win_rate <- function(track_record) {
+  user_win_rate <- summarise(
+    track_record,
     .by = user_id,
     total = n(),
     wins_absolute = sum(win_absolute),
@@ -160,8 +166,12 @@ user_win_rate <- track_record |>
     win_rate_vs_spy = sum(win_vs_SPY) / n(),
     win_rate = sum(win_absolute) / n()
   ) |>
-  # filter(total >= 100) |>
-  arrange(desc(win_rate))
-
+    # filter(total >= 100) |>
+    arrange(desc(win_rate))
+  return(user_win_rate)
+}
+user_win_rate <- get_win_rate(track_record)
+bear_win_rate <- get_win_rate(track_record_bear)
+bull_win_rate <- get_win_rate(track_record_bull)
 methods_restore()
-print(user_win_rate)
+print(bull_win_rate)

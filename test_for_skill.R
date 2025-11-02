@@ -6,7 +6,10 @@ library(gt)
 # H0: p = 0.5 (random chance)
 # H1: p ≠ 0.5 (not random chance)
 
-results <- user_win_rate |>
+results <- bull_win_rate |>
+  # compute(prudence = "lavish") |>
+  # collect() |>
+  as_tibble() |>
   rowwise() |>
   mutate(
     # Perform two-sided binomial test
@@ -33,8 +36,18 @@ results <- user_win_rate |>
   select(-binom_test, -binom_test_rel, -starts_with("conf")) |>
   arrange(p_value)
 
+
 # Filter for statistically significant results (p < 0.05)
 significant_posters <- results |>
+  filter(p_value < 0.05) |>
+  mutate(
+    direction = case_when(
+      win_rate > 0.5 ~ "Above chance",
+      win_rate < 0.5 ~ "Below chance",
+      TRUE ~ "At chance"
+    )
+  )
+significant_rel_posters <- results |>
   filter(p_value_rel < 0.05) |>
   mutate(
     direction = case_when(
@@ -43,6 +56,23 @@ significant_posters <- results |>
       TRUE ~ "At chance"
     )
   )
+
+significant_posters |>
+  ggplot(aes(x = win_rate)) +
+  geom_histogram(binwidth = 0.01, fill = "blue", color = "black") +
+  labs(
+    title = "Histogram of Batting Averages for Statistically Significant Posters",
+    x = "Batting Average",
+    y = "Count"
+  ) +
+  # add vertical line at 0.5
+  geom_vline(
+    xintercept = 0.5,
+    linetype = "dashed",
+    color = "red",
+    linewidth = 2
+  ) +
+  theme_minimal()
 
 cat(
   "posters with win rates statistically different from random chance (p < 0.05):\n\n"

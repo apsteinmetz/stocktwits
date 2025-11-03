@@ -57,12 +57,23 @@ MIN_POSTS <- 100
 MIN_DAYS <- 180 # were they active over at least 6 months
 NUM_TICKERS <- 500
 
-# include only the most popular tickers
-sentiments <- sentiments |>
-  summarise(.by = ticker, count = n()) |>
+# determine the most popular tickers
+popular_tickers <- sentiments |>
+  summarise(
+    .by = ticker,
+    count = n(),
+    start_date = min(date),
+    end_date = max(date)
+  ) |>
   arrange(desc(count)) |>
-  head(NUM_TICKERS) |>
-  select(-count) |>
+  head(NUM_TICKERS)
+
+# save popular tickers to download price data later
+compute_parquet(popular_tickers, "data/popular_tickers.parquet")
+
+# include only the most popular tickers
+sentiments <- popular_tickers |>
+  select(ticker) |>
   inner_join(sentiments, by = "ticker")
 
 summarise(sentiments, n = n())

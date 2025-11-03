@@ -39,62 +39,15 @@ ticker_hist <- function(ticker, start_date, end_date, interval_pd = "1d") {
 # download prices for popular tickers
 download_prices <- FALSE
 if (download_prices) {
-  cat("Downloading price data for popular tickers...\n")
-  # get date range for popular tickers
-  date_ranges <- sentiments |>
-    summarise(
-      .by = ticker,
-      count = n(),
-      start_date = min(date),
-      end_date = max(date)
-    ) |>
-    #collect() |>
-    #left_join(popular_tickers, by = "ticker") |>
-    arrange(desc(count))
-  all_prices <- list()
-  start_row <- 1
-  for (i in start_row:nrow(date_ranges)) {
-    ticker <- date_ranges$ticker[i]
-    start_date <- date_ranges$start_date[i]
-    end_date <- date_ranges$end_date[i]
-    print(paste(
-      "Downloading prices for",
-      ticker,
-      "from",
-      start_date,
-      "to",
-      end_date
-    ))
-    prices <- ticker_hist(ticker, start_date, end_date)
-    # Check if API request failed
-    if (is.null(prices) || nrow(prices) == 0) {
-      print(paste("Error: Failed to download prices for", ticker))
-      next # Skip to next ticker
-    }
-    prices <- prices |> unnest(adj_close)
-    all_prices[[ticker]] <- prices
-  }
-  # combine all prices into a single data frame
-  # with ticker as a column
-  prices_df <- bind_rows(all_prices, .id = "ticker") |>
-    as_tibble() |>
-    mutate(date = as.Date(date))
-  # save to parquet
-  # there won't 500 tickers due to failed ticker searches
-  duckplyr::compute_parquet(prices_df, "price_history_top500.parquet")
+  source("get_prices.r")
 } else {
   prices_df <- duckplyr::read_parquet_duckdb("price_history_top500.parquet")
 }
 
-
-prices_df |> summarise(n = n())
-
-# find number of unique tickers
-prices_df |>
-  summarise(n = n_distinct(ticker))
+prices_df |> summarise(prices = n(), unique_tickers = n_distinct(ticker))
 
 cat("Calculating 5-day percentage price changes...\n")
-prices_change <- prices_df |>
+price_changes <- prices_df |>
   arrange(ticker, date) |>
   mutate(
     .by = ticker,
@@ -119,26 +72,18 @@ prices_change <- prices_df |>
   select(ticker, date, pct_change_5d, pct_change_minus_spy) #
 
 # ticker is SPY then make pct_change_minus_spy equal to pct_change_5d
-prices_change <- prices_change |>
+price_changes <- price_changes |>
   filter(ticker == "SPY") |>
   mutate(pct_change_minus_spy = pct_change_5d) |>
-  union_all((prices_change)) |>
+  union_all((price_changes)) |>
   # remove rows where ticker is SPY and pct_change_minus_spy is 0
   filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_5d))
 
-
-# mutate(
-#   pct_change_minus_spy = ifelse(
-#     ticker == "SPY",
-#     pct_change_5d,
-#     pct_change_minus_spy
-#   )
-
 # TRACK RECORD CALCULATION ==============================
-# join popular_sentiments with prices_change
+# join popular_sentiments with price_changes
 cat("Calculating user track records...\n")
 track_record <- sentiments |>
-  left_join(prices_change, by = c("ticker", "date")) |>
+  left_join(price_changes, by = c("ticker", "date")) |>
   #  na.omit() |>
   # add true/false column for whether pct_change_5d  has the same sign as sentiment
   mutate(

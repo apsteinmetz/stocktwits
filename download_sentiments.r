@@ -1,8 +1,7 @@
 # Load required libraries
-library(DBI)
+library(dplyr)
 library(duckdb)
 library(duckplyr)
-library(dplyr)
 
 # Create DuckDB connection with S3 support
 con <- dbConnect(duckdb())
@@ -37,7 +36,7 @@ download_and_save_symbol_files <- function(file_numbers) {
 
         # Execute query and get as duckplyr dataframe
         df <- dbGetQuery(con, query) |>
-          as_duckplyr_df()
+          as_duckdb_tibble()
 
         # Save as parquet using duckplyr::compute_parquet()
         df |>
@@ -74,7 +73,7 @@ download_and_save_symbol_files <- function(file_numbers) {
 
   return(results)
 }
-cat("Downloading additional symbol_sentiments files using duckplyr...\n")
-file_batch <- 8:40
+cat("Downloading symbol_sentiments files...\n")
+file_batch <- 0:40
 results <- download_and_save_symbol_files(file_batch)
 dbDisconnect(con, shutdown = TRUE)

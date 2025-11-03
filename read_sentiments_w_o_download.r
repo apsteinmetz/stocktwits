@@ -12,9 +12,9 @@ CSV_URL <- paste0(BASE_URL, "/dataset/v1/data/csv")
 
 target_path <- paste0(CSV_URL, "/symbol_sentiments/symbol_sentiments_*.csv")
 # target_path <- paste0(CSV_URL, "/sentiments/sentiments_*.csv")
-sentiment_data <- duckplyr::read_csv_duckdb(path = target_path)
+sentiments <- duckplyr::read_csv_duckdb(path = target_path)
 
-print(sentiment_data)
+summarise(sentiments, n = n())
 
 # Query directly from S3 to extract unique symbols
 # Use the S3 path that sentiment_data was loaded from

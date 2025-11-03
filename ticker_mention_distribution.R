@@ -14,7 +14,7 @@ ggplot(ticker_count, aes(x = rank, y = post_count)) +
 
 # Create log-log plot
 ticker_count |>
-  head(1000) |>
+  head(500) |>
   ggplot(aes(x = rank, y = post_count)) +
   geom_point(alpha = 0.6, color = "steelblue") +
   scale_x_log10() +

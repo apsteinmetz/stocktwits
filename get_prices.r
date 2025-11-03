@@ -1,4 +1,14 @@
 library(duckplyr)
+
+ticker_hist <- function(ticker, start_date, end_date, interval_pd = "1d") {
+  ticker_obj <- Ticker$new(ticker)
+  ticker_obj$get_history(
+    interval = interval_pd,
+    start = start_date,
+    end = end_date + 7 # buffer to include
+  )
+}
+
 cat("Downloading price data for popular tickers...\n")
 popular_tickers <- read_parquet_duckdb("data/popular_tickers.parquet") |>
 

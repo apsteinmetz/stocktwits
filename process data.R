@@ -26,15 +26,6 @@ print(user_stats)
 
 # PRICING DATA DOWNLOAD AND PROCESSING ==============================
 # function to get historical prices for a ticker from yahoofinancer
-ticker_hist <- function(ticker, start_date, end_date, interval_pd = "1d") {
-  ticker_obj <- Ticker$new(ticker)
-  ticker_obj$get_history(
-    interval = interval_pd,
-    start = start_date,
-    end = end_date + 7 # buffer to include
-  )
-}
-
 
 # download prices for popular tickers
 download_prices <- FALSE
@@ -100,23 +91,32 @@ track_record_bear <- track_record |>
   filter(!bullish)
 
 # compute win rate by user_id
-# filter to users with at least 100 posts about the 500 most popular tickers
-get_win_rate <- function(track_record) {
-  user_win_rate <- summarise(
-    track_record,
-    .by = user_id,
-    total = n(),
-    wins_absolute = sum(win_absolute),
-    wins_vs_SPY = sum(win_vs_SPY),
-    win_rate_vs_spy = sum(win_vs_SPY) / n(),
-    win_rate = sum(win_absolute) / n()
-  ) |>
-    # filter(total >= 100) |>
-    arrange(desc(win_rate))
+get_win_rate <- function(track_record, abs_or_rel = c("relative", "absolute")) {
+  if (abs_or_rel == "relative") {
+    user_win_rate <- summarise(
+      track_record,
+      .by = user_id,
+      total = n(),
+      wins = sum(win_vs_SPY),
+      win_rate = sum(win_vs_SPY) / n()
+    )
+  } else {
+    {
+      user_win_rate <- summarise(
+        track_record,
+        .by = user_id,
+        total = n(),
+        wins = sum(win_absolute),
+        win_rate = sum(win_absolute) / n()
+      )
+    } |>
+      arrange(desc(win_rate)) |>
+      filter(!is.na(win_rate))
+  }
   return(user_win_rate)
 }
-user_win_rate <- get_win_rate(track_record)
-bear_win_rate <- get_win_rate(track_record_bear)
-bull_win_rate <- get_win_rate(track_record_bull)
+user_win_rate <- get_win_rate(track_record, "relative")
+bear_win_rate <- get_win_rate(track_record_bear, "relative")
+bull_win_rate <- get_win_rate(track_record_bull, "relative")
 methods_restore()
 print(bull_win_rate)

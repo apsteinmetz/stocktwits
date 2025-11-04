@@ -6,56 +6,41 @@ library(gt)
 # H0: p = 0.5 (random chance)
 # H1: p ≠ 0.5 (not random chance)
 
-results <- bull_win_rate |>
-  # compute(prudence = "lavish") |>
-  # collect() |>
-  as_tibble() |>
-  rowwise() |>
-  mutate(
-    # Perform two-sided binomial test
-    binom_test = list(binom.test(
-      wins_absolute,
-      total,
-      p = 0.5,
-      alternative = "two.sided"
-    )),
-    binom_test_rel = list(binom.test(
-      wins_vs_SPY,
-      total,
-      p = 0.5,
-      alternative = "two.sided"
-    )),
-    p_value = binom_test$p.value,
-    conf_low = binom_test$conf.int[1],
-    conf_high = binom_test$conf.int[2],
-    p_value_rel = binom_test_rel$p.value,
-    conf_low_rel = binom_test_rel$conf.int[1],
-    conf_high_rel = binom_test_rel$conf.int[2]
-  ) |>
-  ungroup() |>
-  select(-binom_test, -binom_test_rel, -starts_with("conf")) |>
-  arrange(p_value)
+get_significanct_posters <- function(win_rate) {
+  results <- win_rate |>
+    as_tibble() |>
+    rowwise() |>
+    mutate(
+      # Perform two-sided binomial test
+      binom_test = list(binom.test(
+        wins,
+        total,
+        p = 0.5,
+        alternative = "two.sided"
+      )),
+      p_value = binom_test$p.value,
+      conf_low = binom_test$conf.int[1],
+      conf_high = binom_test$conf.int[2]
+    ) |>
+    ungroup() |>
+    select(-binom_test, -starts_with("conf")) |>
+    arrange(p_value)
 
+  # Filter for statistically significant results (p < 0.05)
+  significant_posters <- results |>
+    filter(p_value < 0.05) |>
+    mutate(
+      alpha_direction = case_when(
+        win_rate > 0.5 ~ 1,
+        win_rate < 0.5 ~ -1,
+        TRUE ~ 0
+      )
+    )
 
-# Filter for statistically significant results (p < 0.05)
-significant_posters <- results |>
-  filter(p_value < 0.05) |>
-  mutate(
-    direction = case_when(
-      win_rate > 0.5 ~ "Above chance",
-      win_rate < 0.5 ~ "Below chance",
-      TRUE ~ "At chance"
-    )
-  )
-significant_rel_posters <- results |>
-  filter(p_value_rel < 0.05) |>
-  mutate(
-    direction = case_when(
-      win_rate_vs_spy > 0.5 ~ "Above chance",
-      win_rate_vs_spy < 0.5 ~ "Below chance",
-      TRUE ~ "At chance"
-    )
-  )
+  return(significant_posters)
+}
+
+significant_posters <- get_significanct_posters(bear_win_rate)
 
 significant_posters |>
   ggplot(aes(x = win_rate)) +

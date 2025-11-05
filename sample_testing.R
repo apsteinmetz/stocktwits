@@ -1,5 +1,6 @@
-library(dplyr)
-library(lubridate)
+library(tidyverse)
+library(duckplyr)
+library(dbplyr)
 
 date_range <- sentiments |>
   summarise(min_date = min(date), max_date = max(date)) |>
@@ -15,7 +16,9 @@ create_date_windows <- function(start_date, end_date, window_days = 90) {
       by = "1 month"
     )
   ) |>
-    mutate(window_end = window_start + window_days)
+    mutate(window_end = window_start + window_days) |>
+    collect() |>
+    rowid_to_column("window")
   return(date_windows)
 }
 
@@ -59,6 +62,8 @@ for (window_index in 1:nrow(date_windows)) {
   print(paste(
     "Processing window",
     window_index,
+    "of",
+    nrow(date_windows),
     "from",
     start_date,
     "to",
@@ -101,11 +106,84 @@ for (window_index in 1:nrow(date_windows)) {
     ) |>
     mutate(gain_or_loss = pct_change_5d * buy_or_sell) # |>
   # as_tibble()
-  all_windows[[window_index]] <- short_sentiments_test
+  all_windows[[window_index]] <- collect(short_sentiments_test)
 }
 
-all_windows_df <- bind_rows(all_windows, .id = "window") |>
-  filter(!is.na(gain_or_loss)) |>
-  compute_parquet("data/skill_90_30.parquet")
+for (n in 1:length(all_windows)) {
+  print(n)
+  all_windows[[n]] <- as_tibble(all_windows[[n]])
+}
 
-all_windows_df |> summarise(.by = window, median_gain = median(gain_or_loss))
+all_windows_df <- all_windows |>
+  bind_rows(all_windows, .id = "window") |>
+  filter(!is.na(gain_or_loss)) |>
+  mutate(window = as.integer(window)) # |>
+compute_parquet("data/skill_90_30.parquet")
+
+all_windows_df <- read_parquet_duckdb("data/skill_90_30.parquet")
+
+# test results with a smaller trade volume
+# limit trades first 100 signals per month
+all_windows_df_sample <- all_windows_df |>
+  # limit windows to after stocktwits has more than 1000 valid posts per window
+  filter(window > 30) |>
+  as_tibble() |>
+  slice_head(by = window, n = 100)
+
+result_history <- all_windows_df_sample |>
+  summarise(
+    .by = window,
+    start_date = min(date),
+    median_gain = median(gain_or_loss),
+    mean_gain = mean(gain_or_loss),
+    trades = n()
+  ) |>
+  as_tibble() |>
+  arrange(window)
+methods_restore()
+
+# plot median gain by window
+result_history |>
+  ggplot(aes(x = start_date, y = median_gain)) +
+  geom_point(color = "red", size = 2) +
+  geom_hline(yintercept = 0, linewidth = 1) +
+  labs(
+    title = "Median Gain in Month After 3-Month Sentiment Sample",
+    x = "Window Start Date",
+    y = "Median Gain/Loss per Trade"
+  ) +
+  theme_minimal()
+
+# plot number of trades over time
+result_history |>
+  ggplot(aes(x = start_date, y = trades)) +
+  geom_line(color = "blue", size = 2) +
+  labs(
+    title = "Number of Trades in Month After 3-Month Sentiment Sample",
+    x = "Window Start Date",
+    y = "Number of Trades"
+  ) +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal()
+
+
+all_windows_df |>
+  summarise(
+    .by = c(bullish, alpha_direction),
+    trades = n(),
+    median_gain = median(gain_or_loss)
+  )
+all_windows_df |>
+  summarise(
+    count = n(),
+    median_gain = median(gain_or_loss),
+    mean_gain = mean(gain_or_loss)
+  )
+
+
+all_windows_df_sample |>
+  summarise(
+    .by = c(bullish, alpha_direction),
+    trades = n(),
+    median_gain = median(gain_or_loss)
+  )

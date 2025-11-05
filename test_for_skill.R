@@ -30,11 +30,11 @@ get_significanct_posters <- function(win_rate) {
   significant_posters <- results |>
     filter(p_value < 0.05) |>
     mutate(
-      alpha_direction = case_when(
+      alpha_direction = as.integer(case_when(
         win_rate > 0.5 ~ 1,
         win_rate < 0.5 ~ -1,
         TRUE ~ 0
-      )
+      ))
     )
 
   return(significant_posters)

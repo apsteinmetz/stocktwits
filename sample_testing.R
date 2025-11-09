@@ -1,6 +1,10 @@
 library(tidyverse)
 library(duckplyr)
-library(dbplyr)
+
+# load sentiment data filtered for popular tickers and active users
+sentiments <- read_parquet_duckdb("data/sentiments_filtered.parquet")
+# load price change data for most popular tickers
+prices_df <- read_parquet_duckdb("data/price_history_top500.parquet")
 
 date_range <- sentiments |>
   summarise(min_date = min(date), max_date = max(date)) |>
@@ -9,6 +13,7 @@ date_range <- sentiments |>
 
 # create a  tibble of 3-month date range windows for the sentiment data
 create_date_windows <- function(start_date, end_date, window_days = 90) {
+  methods_restore()
   date_windows <- tibble(
     window_start = seq.Date(
       from = start_date,
@@ -19,11 +24,59 @@ create_date_windows <- function(start_date, end_date, window_days = 90) {
     mutate(window_end = window_start + window_days) |>
     collect() |>
     rowid_to_column("window")
+  methods_restore()
   return(date_windows)
 }
-
 date_windows <- create_date_windows(date_range$min_date, date_range$max_date)
+prices_df |> summarise(prices = n(), unique_tickers = n_distinct(ticker))
 
+cat("Calculating 5-day percentage price changes...\n")
+price_changes <- prices_df |>
+  arrange(ticker, date) |>
+  mutate(
+    .by = ticker,
+    adj_close_lead5 = lead(adj_close, 5),
+    pct_change_5d = (adj_close_lead5 - adj_close) / adj_close
+  ) |>
+  select(ticker, date, pct_change_5d) |>
+  # add another column for pct change minus the SPY change
+  left_join(
+    prices_df |>
+      filter(ticker == "SPY") |>
+      arrange(date) |>
+      mutate(
+        .by = ticker,
+        adj_close_lead5 = lead(adj_close, 5),
+        spy_pct_change_5d = (adj_close_lead5 - adj_close) / adj_close
+      ) |>
+      select(date, spy_pct_change_5d),
+    by = "date"
+  ) |>
+  mutate(pct_change_minus_spy = pct_change_5d - spy_pct_change_5d) |>
+  select(ticker, date, pct_change_5d, pct_change_minus_spy) #
+
+# ticker is SPY then make pct_change_minus_spy equal to pct_change_5d
+price_changes <- price_changes |>
+  filter(ticker == "SPY") |>
+  mutate(pct_change_minus_spy = pct_change_5d) |>
+  union_all((price_changes)) |>
+  # remove rows where ticker is SPY and pct_change_minus_spy is 0
+  filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_5d))
+
+# TRACK RECORD CALCULATION ==============================
+# join popular_sentiments with price_changes
+cat("Calculating user track records...\n")
+track_record <- sentiments |>
+  left_join(price_changes, by = c("ticker", "date")) |>
+  #  na.omit() |>
+  # add true/false column for whether pct_change_5d  has the same sign as sentiment
+  mutate(
+    win_absolute = bullish == (pct_change_5d > 0),
+    win_vs_SPY = bullish == (pct_change_minus_spy > 0)
+  ) |>
+  #  select(user_id, ticker, date, bullish, win_absolute)
+  select(user_id, ticker, date, bullish, win_absolute, win_vs_SPY) |>
+  filter(!is.na(win_absolute) & !is.na(win_vs_SPY))
 # compute win rate by user_id
 get_win_rate <- function(
   track_record,
@@ -54,83 +107,112 @@ get_win_rate <- function(
 }
 
 # make trade history for the selected date window
-all_windows <- list()
-# for (window_index in nrow(date_windows)) {
-for (window_index in 1:nrow(date_windows)) {
-  start_date <- date_windows$window_start[window_index]
-  end_date <- date_windows$window_end[window_index]
-  print(paste(
-    "Processing window",
-    window_index,
-    "of",
-    nrow(date_windows),
-    "from",
-    start_date,
-    "to",
-    end_date
-  ))
-  test_end_date <- end_date + days(30)
-  short_sentiments_sample <- sentiments |>
-    filter(date >= start_date, date <= end_date)
+CREATE_WINDOWED_RECORDS <- FALSE
+if (CREATE_WINDOWED_RECORDS) {
+  all_windows <- list()
+  for (window_index in 1:nrow(date_windows)) {
+    start_date <- date_windows$window_start[window_index]
+    end_date <- date_windows$window_end[window_index]
+    print(paste(
+      "Processing window",
+      window_index,
+      "of",
+      nrow(date_windows),
+      "from",
+      start_date,
+      "to",
+      end_date
+    ))
+    test_end_date <- end_date + days(30)
+    short_sentiments_sample <- sentiments |>
+      filter(date >= start_date, date <= end_date)
 
-  short_record <- track_record |>
-    filter(date >= start_date, date <= end_date)
+    short_record <- track_record |>
+      filter(date >= start_date, date <= end_date)
 
-  # track_record_bull <- short_record |>
-  # filter(bullish)
-  # track_record_bear <- short_record |>
-  #  filter(!bullish)
+    get_significanct_posters <- function(win_rate) {
+      results <- win_rate |>
+        as_tibble() |>
+        rowwise() |>
+        mutate(
+          # Perform two-sided binomial test
+          binom_test = list(binom.test(
+            wins,
+            total,
+            p = 0.5,
+            alternative = "two.sided"
+          )),
+          p_value = binom_test$p.value,
+          conf_low = binom_test$conf.int[1],
+          conf_high = binom_test$conf.int[2]
+        ) |>
+        ungroup() |>
+        select(-binom_test, -starts_with("conf")) |>
+        arrange(p_value)
 
-  user_win_rate <- get_win_rate(track_record, "relative")
-  # bear_win_rate <- get_win_rate(track_record_bear, "relative")
-  # bull_win_rate <- get_win_rate(track_record_bull, "relative")
-  # methods_restore()
-  # print(bull_win_rate)
+      # Filter for statistically significant results (p < 0.05)
+      significant_posters <- results |>
+        filter(p_value < 0.05) |>
+        mutate(
+          alpha_direction = as.integer(case_when(
+            win_rate > 0.5 ~ 1,
+            win_rate < 0.5 ~ -1,
+            TRUE ~ 0
+          ))
+        )
+      return(significant_posters)
+    }
 
-  significant_posters <- get_significanct_posters(user_win_rate)
+    user_win_rate <- get_win_rate(track_record, "relative")
+    # bear_win_rate <- get_win_rate(track_record_bear, "relative")
+    # bull_win_rate <- get_win_rate(track_record_bull, "relative")
+    # methods_restore()
+    # print(bull_win_rate)
 
-  short_sentiments_test <- sentiments |>
-    filter(date > end_date, date <= test_end_date) |>
-    inner_join(
-      select(significant_posters, user_id, alpha_direction),
-      by = "user_id"
-    ) |>
-    mutate(
-      buy_or_sell = as.integer((as.integer(bullish) * 2 - 1) * alpha_direction)
-    ) |>
-    # add ticker price change over next 5 days
-    # filter(ticker == "SPY") |>
-    left_join(
-      select(price_changes, ticker, date, pct_change_5d),
-      by = c("ticker", "date")
-    ) |>
-    mutate(gain_or_loss = pct_change_5d * buy_or_sell) # |>
-  # as_tibble()
-  all_windows[[window_index]] <- collect(short_sentiments_test)
+    significant_posters <- get_significanct_posters(user_win_rate)
+    short_sentiments_test <- sentiments |>
+      filter(date > end_date, date <= test_end_date) |>
+      inner_join(
+        select(significant_posters, user_id, alpha_direction),
+        by = "user_id"
+      ) |>
+      mutate(
+        buy_or_sell = as.integer(
+          (as.integer(bullish) * 2 - 1) * alpha_direction
+        )
+      ) |>
+      # add ticker price change over next 5 days
+      # filter(ticker == "SPY") |>
+      left_join(
+        select(price_changes, ticker, date, pct_change_5d),
+        by = c("ticker", "date")
+      ) |>
+      mutate(gain_or_loss = pct_change_5d * buy_or_sell) # |>
+    # as_tibble()
+    all_windows[[window_index]] <- collect(short_sentiments_test)
+  }
+  all_windows_df <- all_windows |>
+    bind_rows(all_windows, .id = "window") |>
+    filter(!is.na(gain_or_loss)) |>
+    mutate(window = as.integer(window)) # |>
+  compute_parquet("data/skill_90_30.parquet")
+} else {
+  cat("Loading precomputed windowed records...\n")
+  all_windows_df <- read_parquet_duckdb("data/skill_90_30.parquet")
 }
-
-for (n in 1:length(all_windows)) {
-  print(n)
-  all_windows[[n]] <- as_tibble(all_windows[[n]])
-}
-
-all_windows_df <- all_windows |>
-  bind_rows(all_windows, .id = "window") |>
-  filter(!is.na(gain_or_loss)) |>
-  mutate(window = as.integer(window)) # |>
-compute_parquet("data/skill_90_30.parquet")
-
-all_windows_df <- read_parquet_duckdb("data/skill_90_30.parquet")
 
 # test results with a smaller trade volume
-# limit trades first 100 signals per month
-all_windows_df_sample <- all_windows_df |>
+all_windows_df_limited <- all_windows_df |>
   # limit windows to after stocktwits has more than 1000 valid posts per window
   filter(window > 30) |>
+  # limit windows to buy only
+  filter(buy_or_sell == 1) |>
   as_tibble() |>
+  arrange(date) |>
+  # limit trades first 100 signals per month
   slice_head(by = window, n = 100)
 
-result_history <- all_windows_df_sample |>
+result_history <- all_windows_df_limited |>
   summarise(
     .by = window,
     start_date = min(date),
@@ -181,9 +263,10 @@ all_windows_df |>
   )
 
 
-all_windows_df_sample |>
+all_windows_df_limited |>
   summarise(
     .by = c(bullish, alpha_direction),
     trades = n(),
-    median_gain = median(gain_or_loss)
+    median_gain = median(gain_or_loss),
+    mean_gain = mean(gain_or_loss)
   )

@@ -37,15 +37,15 @@ if (download_prices) {
 
 prices_df |> summarise(prices = n(), unique_tickers = n_distinct(ticker))
 
-cat("Calculating 5-day percentage price changes...\n")
+cat("Calculating 1-week percentage price changes...\n")
 price_changes <- prices_df |>
   arrange(ticker, date) |>
   mutate(
     .by = ticker,
-    adj_close_lead5 = lead(adj_close, 5),
-    pct_change_5d = (adj_close_lead5 - adj_close) / adj_close
+    adj_close_lead7 = lead(adj_close, 5),
+    pct_change_7d = (adj_close_lead7 - adj_close) / adj_close
   ) |>
-  select(ticker, date, pct_change_5d) |>
+  select(ticker, date, pct_change_7d) |>
   # add another column for pct change minus the SPY change
   left_join(
     prices_df |>
@@ -54,21 +54,21 @@ price_changes <- prices_df |>
       mutate(
         .by = ticker,
         adj_close_lead5 = lead(adj_close, 5),
-        spy_pct_change_5d = (adj_close_lead5 - adj_close) / adj_close
+        spy_pct_change_7d = (adj_close_lead5 - adj_close) / adj_close
       ) |>
-      select(date, spy_pct_change_5d),
+      select(date, spy_pct_change_7d),
     by = "date"
   ) |>
-  mutate(pct_change_minus_spy = pct_change_5d - spy_pct_change_5d) |>
-  select(ticker, date, pct_change_5d, pct_change_minus_spy) #
+  mutate(pct_change_minus_spy = pct_change_7d - spy_pct_change_7d) |>
+  select(ticker, date, pct_change_7d, pct_change_minus_spy) #
 
-# ticker is SPY then make pct_change_minus_spy equal to pct_change_5d
+# ticker is SPY then make pct_change_minus_spy equal to pct_change_7d
 price_changes <- price_changes |>
   filter(ticker == "SPY") |>
-  mutate(pct_change_minus_spy = pct_change_5d) |>
+  mutate(pct_change_minus_spy = pct_change_7d) |>
   union_all((price_changes)) |>
   # remove rows where ticker is SPY and pct_change_minus_spy is 0
-  filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_5d))
+  filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_7d))
 
 # TRACK RECORD CALCULATION ==============================
 # join popular_sentiments with price_changes
@@ -76,9 +76,9 @@ cat("Calculating user track records...\n")
 track_record <- sentiments |>
   left_join(price_changes, by = c("ticker", "date")) |>
   #  na.omit() |>
-  # add true/false column for whether pct_change_5d  has the same sign as sentiment
+  # add true/false column for whether pct_change_7d  has the same sign as sentiment
   mutate(
-    win_absolute = bullish == (pct_change_5d > 0),
+    win_absolute = bullish == (pct_change_7d > 0),
     win_vs_SPY = bullish == (pct_change_minus_spy > 0)
   ) |>
   #  select(user_id, ticker, date, bullish, win_absolute)

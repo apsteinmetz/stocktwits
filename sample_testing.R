@@ -30,15 +30,15 @@ create_date_windows <- function(start_date, end_date, window_days = 90) {
 date_windows <- create_date_windows(date_range$min_date, date_range$max_date)
 prices_df |> summarise(prices = n(), unique_tickers = n_distinct(ticker))
 
-cat("Calculating 5-day percentage price changes...\n")
+cat("Calculating 7-day percentage price changes...\n")
 price_changes <- prices_df |>
   arrange(ticker, date) |>
   mutate(
     .by = ticker,
-    adj_close_lead5 = lead(adj_close, 5),
-    pct_change_5d = (adj_close_lead5 - adj_close) / adj_close
+    adj_close_lead7 = lead(adj_close, 5),
+    pct_change_7d = (adj_close_lead7 - adj_close) / adj_close
   ) |>
-  select(ticker, date, pct_change_5d) |>
+  # select(ticker, date, pct_change_7d) |>
   # add another column for pct change minus the SPY change
   left_join(
     prices_df |>
@@ -46,22 +46,29 @@ price_changes <- prices_df |>
       arrange(date) |>
       mutate(
         .by = ticker,
-        adj_close_lead5 = lead(adj_close, 5),
-        spy_pct_change_5d = (adj_close_lead5 - adj_close) / adj_close
+        adj_close_lead7 = lead(adj_close, 5),
+        spy_pct_change_7d = (adj_close_lead7 - adj_close) / adj_close
       ) |>
-      select(date, spy_pct_change_5d),
+      select(date, spy_pct_change_7d),
     by = "date"
   ) |>
-  mutate(pct_change_minus_spy = pct_change_5d - spy_pct_change_5d) |>
-  select(ticker, date, pct_change_5d, pct_change_minus_spy) #
+  mutate(pct_change_minus_spy = pct_change_7d - spy_pct_change_7d) |>
+  select(
+    ticker,
+    date,
+    adj_close,
+    adj_close_lead7,
+    pct_change_7d,
+    pct_change_minus_spy
+  )
 
-# ticker is SPY then make pct_change_minus_spy equal to pct_change_5d
+# ticker is SPY then make pct_change_minus_spy equal to pct_change_7d
 price_changes <- price_changes |>
   filter(ticker == "SPY") |>
-  mutate(pct_change_minus_spy = pct_change_5d) |>
+  mutate(pct_change_minus_spy = pct_change_7d) |>
   union_all((price_changes)) |>
   # remove rows where ticker is SPY and pct_change_minus_spy is 0
-  filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_5d))
+  filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_7d))
 
 # TRACK RECORD CALCULATION ==============================
 # join popular_sentiments with price_changes
@@ -69,19 +76,16 @@ cat("Calculating user track records...\n")
 track_record <- sentiments |>
   left_join(price_changes, by = c("ticker", "date")) |>
   #  na.omit() |>
-  # add true/false column for whether pct_change_5d  has the same sign as sentiment
+  # add true/false column for whether pct_change_7d  has the same sign as sentiment
   mutate(
-    win_absolute = bullish == (pct_change_5d > 0),
+    win_absolute = bullish == (pct_change_7d > 0),
     win_vs_SPY = bullish == (pct_change_minus_spy > 0)
   ) |>
   #  select(user_id, ticker, date, bullish, win_absolute)
-  select(user_id, ticker, date, bullish, win_absolute, win_vs_SPY) |>
+  # select(user_id, ticker, date, bullish, win_absolute, win_vs_SPY) |>
   filter(!is.na(win_absolute) & !is.na(win_vs_SPY))
 # compute win rate by user_id
-get_win_rate <- function(
-  track_record,
-  abs_or_rel = c("relative", "absolute")
-) {
+get_win_rate <- function(track_record, abs_or_rel = c("relative", "absolute")) {
   if (abs_or_rel == "relative") {
     user_win_rate <- summarise(
       track_record,
@@ -106,8 +110,41 @@ get_win_rate <- function(
   return(user_win_rate)
 }
 
+get_significanct_posters <- function(win_rate) {
+  results <- win_rate |>
+    as_tibble() |>
+    rowwise() |>
+    mutate(
+      # Perform two-sided binomial test
+      binom_test = list(binom.test(
+        wins,
+        total,
+        p = 0.5,
+        alternative = "two.sided"
+      )),
+      p_value = binom_test$p.value,
+      conf_low = binom_test$conf.int[1],
+      conf_high = binom_test$conf.int[2]
+    ) |>
+    ungroup() |>
+    select(-binom_test, -starts_with("conf")) |>
+    arrange(p_value)
+
+  # Filter for statistically significant results (p < 0.05)
+  significant_posters <- results |>
+    filter(p_value < 0.05) |>
+    mutate(
+      alpha_direction = as.integer(case_when(
+        win_rate > 0.5 ~ 1,
+        win_rate < 0.5 ~ -1,
+        TRUE ~ 0
+      ))
+    )
+  return(significant_posters)
+}
+
 # make trade history for the selected date window
-CREATE_WINDOWED_RECORDS <- FALSE
+CREATE_WINDOWED_RECORDS <- TRUE
 if (CREATE_WINDOWED_RECORDS) {
   all_windows <- list()
   for (window_index in 1:nrow(date_windows)) {
@@ -130,39 +167,6 @@ if (CREATE_WINDOWED_RECORDS) {
     short_record <- track_record |>
       filter(date >= start_date, date <= end_date)
 
-    get_significanct_posters <- function(win_rate) {
-      results <- win_rate |>
-        as_tibble() |>
-        rowwise() |>
-        mutate(
-          # Perform two-sided binomial test
-          binom_test = list(binom.test(
-            wins,
-            total,
-            p = 0.5,
-            alternative = "two.sided"
-          )),
-          p_value = binom_test$p.value,
-          conf_low = binom_test$conf.int[1],
-          conf_high = binom_test$conf.int[2]
-        ) |>
-        ungroup() |>
-        select(-binom_test, -starts_with("conf")) |>
-        arrange(p_value)
-
-      # Filter for statistically significant results (p < 0.05)
-      significant_posters <- results |>
-        filter(p_value < 0.05) |>
-        mutate(
-          alpha_direction = as.integer(case_when(
-            win_rate > 0.5 ~ 1,
-            win_rate < 0.5 ~ -1,
-            TRUE ~ 0
-          ))
-        )
-      return(significant_posters)
-    }
-
     user_win_rate <- get_win_rate(track_record, "relative")
     # bear_win_rate <- get_win_rate(track_record_bear, "relative")
     # bull_win_rate <- get_win_rate(track_record_bull, "relative")
@@ -182,20 +186,19 @@ if (CREATE_WINDOWED_RECORDS) {
         )
       ) |>
       # add ticker price change over next 5 days
-      # filter(ticker == "SPY") |>
       left_join(
-        select(price_changes, ticker, date, pct_change_5d),
+        select(price_changes, ticker, date, pct_change_7d),
         by = c("ticker", "date")
       ) |>
-      mutate(gain_or_loss = pct_change_5d * buy_or_sell) # |>
+      mutate(gain_or_loss = pct_change_7d * buy_or_sell) # |>
     # as_tibble()
     all_windows[[window_index]] <- collect(short_sentiments_test)
   }
   all_windows_df <- all_windows |>
-    bind_rows(all_windows, .id = "window") |>
+    bind_rows(.id = "window") |>
     filter(!is.na(gain_or_loss)) |>
-    mutate(window = as.integer(window)) # |>
-  compute_parquet("data/skill_90_30.parquet")
+    mutate(window = as.integer(window)) |>
+    compute_parquet("data/skill_90_30.parquet")
 } else {
   cat("Loading precomputed windowed records...\n")
   all_windows_df <- read_parquet_duckdb("data/skill_90_30.parquet")
@@ -210,7 +213,22 @@ all_windows_df_limited <- all_windows_df |>
   as_tibble() |>
   arrange(date) |>
   # limit trades first 100 signals per month
-  slice_head(by = window, n = 100)
+  slice_head(by = window, n = 100) |>
+  # add SPY price change for comparison
+  left_join(
+    prices_df |>
+      filter(ticker == "SPY") |>
+      arrange(date) |>
+      mutate(
+        .by = ticker,
+        adj_close_lead7 = lead(adj_close, 5),
+        spy_pct_change_7d = (adj_close_lead7 - adj_close) / adj_close
+      ) |>
+      select(date, spy_pct_change_7d),
+    by = "date"
+  ) |>
+  mutate(gain_or_loss_minus_spy = gain_or_loss - spy_pct_change_7d)
+
 
 result_history <- all_windows_df_limited |>
   summarise(
@@ -218,6 +236,8 @@ result_history <- all_windows_df_limited |>
     start_date = min(date),
     median_gain = median(gain_or_loss),
     mean_gain = mean(gain_or_loss),
+    median_excess_gain = median(gain_or_loss_minus_spy),
+    mean_excess_gain = mean(gain_or_loss_minus_spy),
     trades = n()
   ) |>
   as_tibble() |>
@@ -226,7 +246,7 @@ methods_restore()
 
 # plot median gain by window
 result_history |>
-  ggplot(aes(x = start_date, y = median_gain)) +
+  ggplot(aes(x = start_date, y = mean_excess_gain)) +
   geom_point(color = "red", size = 2) +
   geom_hline(yintercept = 0, linewidth = 1) +
   labs(

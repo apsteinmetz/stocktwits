@@ -32,7 +32,9 @@ download_prices <- FALSE
 if (download_prices) {
   source("get_prices.r")
 } else {
-  prices_df <- duckplyr::read_parquet_duckdb("price_history_top500.parquet")
+  prices_df <- duckplyr::read_parquet_duckdb(
+    "data/price_history_top500.parquet"
+  )
 }
 
 prices_df |> summarise(prices = n(), unique_tickers = n_distinct(ticker))

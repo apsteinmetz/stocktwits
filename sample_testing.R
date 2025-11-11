@@ -68,7 +68,8 @@ price_changes <- price_changes |>
   mutate(pct_change_minus_spy = pct_change_7d) |>
   union_all((price_changes)) |>
   # remove rows where ticker is SPY and pct_change_minus_spy is 0
-  filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_7d))
+  filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_7d)) |>
+  collect()
 
 # TRACK RECORD CALCULATION ==============================
 # join popular_sentiments with price_changes

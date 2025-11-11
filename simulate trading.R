@@ -1,22 +1,35 @@
 library(tidyverse)
-library(lubridate)
+library(duckplyr)
+
+# load all_recs
+all_recs_limited <- read_parquet_duckdb("data/all_recs_limited.parquet")
+# load price data
+prices_df <- read_parquet_duckdb("data/price_history_top500.parquet")
+
 
 # simulate strategy: start $10k, $1k per trade, 7-day holds
 initial_capital <- 10000
-trade_size <- 1000
+trade_size <- 100
 hold_days <- 7
+risk_free_rate <- 0.03
+invest_idle_in <- "cash" # or "SPY"
+
 
 simulate_strategy <- function(
-  all_windows_df_limited,
+  recommendations,
   prices_df,
   initial_capital = 10000,
-  trade_size = 1000,
-  hold_days = 7
+  trade_size = 100,
+  hold_days = 7,
+  invest_idle_in = c("SPY", "cash"),
+  risk_free_rate = 0.03
 ) {
-  trades <- all_windows_df_limited |>
+  invest_idle_in <- match.arg(invest_idle_in)
+
+  trades <- recommendations |>
     as_tibble() |>
     mutate(
-      open_date = as_date(date),
+      open_date = as.Date(date),
       close_date = open_date + days(hold_days)
     ) |>
     arrange(open_date)
@@ -30,7 +43,7 @@ simulate_strategy <- function(
     filter(ticker == "SPY") |>
     select(date, adj_close) |>
     arrange(date) |>
-    mutate(date = as_date(date)) |>
+    mutate(date = as.Date(date)) |>
     distinct(date, .keep_all = TRUE)
 
   spy_on_sim_dates <- tibble(date = all_dates) |>
@@ -51,18 +64,35 @@ simulate_strategy <- function(
     as.character(spy_on_sim_dates$date)
   )
 
-  # bookkeeping: idle capital is held as fractional SPY shares
+  # bookkeeping
   start_spy_price <- spy_on_sim_dates$adj_close[1]
-  idle_spy_shares <- initial_capital / start_spy_price
+
+  if (invest_idle_in == "SPY") {
+    # idle capital held in fractional SPY shares
+    idle_spy_shares <- initial_capital / start_spy_price
+    idle_cash <- NULL
+  } else {
+    # idle capital held as cash that accrues at risk-free rate
+    idle_cash <- initial_capital
+    idle_spy_shares <- NULL
+    # daily compounding factor
+    daily_rf <- (1 + risk_free_rate)^(1 / 365.25) - 1
+  }
+
   invested <- 0
   active_positions <- tibble()
   trades_executed <- tibble()
 
-  # daily loop: open trades by selling idle SPY shares; on close convert proceeds back to SPY shares
+  # daily loop: close then open
   daily_log_list <- vector("list", length(all_dates))
   for (i in seq_along(all_dates)) {
-    today <- as_date(all_dates[i])
+    today <- as.Date(all_dates[i])
     current_spy_price <- as.numeric(spy_price_map[as.character(today)])
+
+    # accrue interest on idle cash at start of day (cash mode)
+    if (invest_idle_in == "cash") {
+      idle_cash <- idle_cash * (1 + daily_rf)
+    }
 
     # Close positions that mature today
     if (nrow(active_positions) > 0) {
@@ -74,9 +104,14 @@ simulate_strategy <- function(
         proceeds_dollars <- closing$trade_size * (1 + closing$gain_or_loss)
         profit_dollars <- proceeds_dollars - closing$trade_size
 
-        # convert proceeds to SPY shares at today's price and add to idle holdings
-        shares_bought <- proceeds_dollars / current_spy_price
-        idle_spy_shares <- idle_spy_shares + sum(shares_bought)
+        if (invest_idle_in == "SPY") {
+          # convert proceeds to SPY shares at today's price and add to idle holdings
+          shares_bought <- proceeds_dollars / current_spy_price
+          idle_spy_shares <- idle_spy_shares + sum(shares_bought)
+        } else {
+          # add proceeds to idle cash
+          idle_cash <- idle_cash + sum(as.numeric(proceeds_dollars))
+        }
 
         invested <- invested - sum(closing$trade_size)
 
@@ -98,32 +133,61 @@ simulate_strategy <- function(
       for (r in seq_len(nrow(todays_signals))) {
         row <- todays_signals[r, , drop = FALSE]
 
-        # value available in idle SPY today
-        idle_value <- idle_spy_shares * current_spy_price
+        if (invest_idle_in == "SPY") {
+          idle_value <- idle_spy_shares * current_spy_price
+          if (idle_value >= trade_size) {
+            # sell fractional SPY shares to fund the trade
+            shares_to_sell <- trade_size / current_spy_price
+            idle_spy_shares <- idle_spy_shares - shares_to_sell
 
-        if (idle_value >= trade_size) {
-          # sell fractional SPY shares to fund the trade
-          shares_to_sell <- trade_size / current_spy_price
-          idle_spy_shares <- idle_spy_shares - shares_to_sell
+            invested <- invested + trade_size
 
-          invested <- invested + trade_size
-
-          pos <- row |>
-            mutate(trade_size = trade_size)
-          active_positions <- bind_rows(active_positions, pos)
+            pos <- row |>
+              mutate(trade_size = trade_size)
+            active_positions <- bind_rows(active_positions, pos)
+          } else {
+            # skip if not enough idle-SPY value
+          }
         } else {
-          # not enough idle-SPY value -> skip signal
+          # cash mode
+          if (idle_cash >= trade_size) {
+            idle_cash <- idle_cash - trade_size
+            invested <- invested + trade_size
+
+            pos <- row |>
+              mutate(trade_size = trade_size)
+            active_positions <- bind_rows(active_positions, pos)
+          } else {
+            # skip if not enough cash
+          }
         }
       }
     }
 
-    # equity = value of idle SPY holdings + principal locked in active trades
+    # equity = value of idle holdings + principal locked in active trades
+    if (invest_idle_in == "SPY") {
+      idle_value_today <- idle_spy_shares * current_spy_price
+      equity_today <- idle_value_today + invested
+      idle_spy_shares_today <- idle_spy_shares
+      idle_cash_today <- NA_real_
+    } else {
+      idle_value_today <- idle_cash
+      equity_today <- idle_cash + invested
+      idle_spy_shares_today <- NA_real_
+      idle_cash_today <- idle_cash
+    }
+
     daily_log_list[[i]] <- tibble(
       date = today,
-      idle_spy_shares = idle_spy_shares,
-      idle_spy_value = idle_spy_shares * current_spy_price,
+      idle_spy_shares = idle_spy_shares_today,
+      idle_spy_value = ifelse(
+        is.na(idle_spy_shares_today),
+        NA_real_,
+        idle_spy_shares_today * current_spy_price
+      ),
+      idle_cash = idle_cash_today,
       invested = invested,
-      equity = idle_spy_shares * current_spy_price + invested,
+      equity = equity_today,
       open_positions = nrow(active_positions)
     )
   }
@@ -141,8 +205,8 @@ simulate_strategy <- function(
   trade_blotter <- trades_executed |>
     as_tibble() |>
     mutate(
-      open_date = as_date(open_date),
-      close_date = as_date(close_date),
+      open_date = as.Date(open_date),
+      close_date = as.Date(close_date),
       trade_id = row_number()
     ) |>
     select(
@@ -164,25 +228,46 @@ simulate_strategy <- function(
     mutate(spy_equity = spy_shares_bh * adj_close)
 
   # mountain chart: strategy equity vs SPY buy-and-hold
-  plot_df <- daily_log |>
-    select(date, equity) |>
-    left_join(spy_series |> select(date, spy_equity), by = "date")
+  if (invest_idle_in == "SPY") {
+    plot_df <- daily_log |>
+      select(date, equity) |>
+      left_join(spy_series |> select(date, spy_equity), by = "date")
 
-  mountain_plot <- ggplot(plot_df, aes(x = date)) +
-    geom_area(aes(y = equity), fill = "#2c7fb8", alpha = 0.25) +
-    geom_line(aes(y = equity), color = "#0868ac", size = 1) +
-    geom_line(
-      aes(y = spy_equity),
-      color = "#a50f15",
-      size = 1,
-      linetype = "dashed"
-    ) +
-    labs(
-      title = "Strategy Equity (area) vs SPY Buy-and-Hold (dashed)",
-      x = "Date",
-      y = "Capital ($)"
-    ) +
-    theme_minimal()
+    mountain_plot <- ggplot(plot_df, aes(x = date)) +
+      geom_area(aes(y = equity), fill = "#2c7fb8", alpha = 0.25) +
+      geom_line(aes(y = equity), color = "#0868ac", size = 1) +
+      geom_line(
+        aes(y = spy_equity),
+        color = "#a50f15",
+        size = 1,
+        linetype = "dashed"
+      ) +
+      labs(
+        title = paste0(
+          "Strategy Equity (area) vs SPY Buy-and-Hold (dashed) — idle invested in: ",
+          invest_idle_in
+        ),
+        x = "Date",
+        y = "Capital ($)"
+      ) +
+      theme_minimal()
+  } else {
+    plot_df <- daily_log |>
+      select(date, equity)
+
+    mountain_plot <- ggplot(plot_df, aes(x = date)) +
+      geom_area(aes(y = equity), fill = "#2c7fb8", alpha = 0.25) +
+      geom_line(aes(y = equity), color = "#0868ac", size = 1) +
+      labs(
+        title = paste0(
+          "Strategy Equity (area) — idle invested in: ",
+          invest_idle_in
+        ),
+        x = "Date",
+        y = "Capital ($)"
+      ) +
+      theme_minimal()
+  }
 
   list(
     trades_executed = trades_executed,
@@ -192,16 +277,39 @@ simulate_strategy <- function(
     mountain_plot = mountain_plot
   )
 }
-
-# Example usage (assumes all_windows_df_limited and prices_df are present in environment):
+# Example usage (assumes recommendations and prices_df are present in environment):
 sim_out <- simulate_strategy(
-  all_windows_df_limited,
+  all_recs_limited,
   prices_df,
   initial_capital,
   trade_size,
-  hold_days
+  hold_days,
+  invest_idle_in = "cash"
 )
 
 sim_out$trade_blotter
 sim_out$mountain_plot
 sim_out$daily_series
+
+# compute compound annual growth rate (CAGR) for strategy and SPY buy-and-hold
+compute_cagr <- function(daily_series, spy_series) {
+  start_date <- min(daily_series$date)
+  end_date <- max(daily_series$date)
+  num_years <- as.numeric(difftime(end_date, start_date, units = "days")) /
+    365.25
+
+  start_equity <- daily_series$equity[daily_series$date == start_date]
+  end_equity <- daily_series$equity[daily_series$date == end_date]
+  strategy_cagr <- (end_equity / start_equity)^(1 / num_years) - 1
+
+  start_spy_equity <- spy_series$spy_equity[spy_series$date == start_date]
+  end_spy_equity <- spy_series$spy_equity[spy_series$date == end_date]
+  spy_cagr <- (end_spy_equity / start_spy_equity)^(1 / num_years) - 1
+
+  tibble(
+    strategy_cagr = strategy_cagr,
+    spy_cagr = spy_cagr
+  )
+}
+cagr_results <- compute_cagr(sim_out$daily_series, sim_out$spy_series)
+print(cagr_results)

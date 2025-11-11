@@ -71,6 +71,10 @@ price_changes <- price_changes |>
   filter(!(ticker == "SPY" & pct_change_minus_spy != pct_change_7d)) |>
   collect()
 
+price_changes |>
+  compute_parquet("data/price_changes_7d.parquet")
+
+
 # TRACK RECORD CALCULATION ==============================
 # join popular_sentiments with price_changes
 cat("Calculating user track records...\n")
@@ -204,6 +208,10 @@ if (CREATE_WINDOWED_RECORDS) {
   cat("Loading precomputed windowed records...\n")
   all_windows_df <- read_parquet_duckdb("data/skill_90_30.parquet")
 }
+all_windows[[125]] |>
+  filter(ticker == "OCGN", date == as.Date("2021-01-04")) |>
+  head(10)
+
 
 # test results with a smaller trade volume
 all_windows_df_limited <- all_windows_df |>
@@ -291,3 +299,7 @@ all_windows_df_limited |>
     median_gain = median(gain_or_loss),
     mean_gain = mean(gain_or_loss)
   )
+
+all_recs_limited <- all_windows_df_limited |>
+  select(ticker, date, buy_or_sell) |>
+  compute_parquet("data/all_recs_limited.parquet")

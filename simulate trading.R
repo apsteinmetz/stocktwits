@@ -1,19 +1,21 @@
 library(tidyverse)
-library(duckplyr)
+# library(duckplyr)
 
 # load all_recs
-all_recs_limited <- read_parquet_duckdb("data/all_recs_limited.parquet")
+all_recs_limited <- read_parquet_duckdb("data/all_recs_limited.parquet") |>
+  as_tibble()
 # load price data
-prices_df <- read_parquet_duckdb("data/price_history_top500.parquet")
+prices_df <- read_parquet_duckdb("data/price_history_top500.parquet") |>
+  as_tibble() |>
+  select(ticker, date, adj_close)
 
 
 # simulate strategy: start $10k, $1k per trade, 7-day holds
 initial_capital <- 10000
 trade_size <- 100
 hold_days <- 7
-risk_free_rate <- 0.03
-invest_idle_in <- "cash" # or "SPY"
-
+risk_free_rate <- 0.02
+invest_idle_in <- "SPY" # or "SPY"
 
 simulate_strategy <- function(
   recommendations,
@@ -26,12 +28,32 @@ simulate_strategy <- function(
 ) {
   invest_idle_in <- match.arg(invest_idle_in)
 
+  # prepare prices: forward-fill adj_close per ticker so we can lookup entry/exit prices
+  # prices_filled <- prices_df |>
+  #   arrange(ticker, date) |>
+  #   group_by(ticker) |>
+  #   tidyr::fill(adj_close, .direction = "down") |>
+  #   ungroup() |>
+  #   select(ticker, date, adj_close)
+
+  # build trades from recommendations: use recommendation date as open_date and lookup entry/exit prices
   trades <- recommendations |>
     as_tibble() |>
+    rename(open_date = date) |>
+    mutate(close_date = open_date + hold_days) |>
+    # join entry price
+    left_join(prices_df, by = c("ticker", "open_date" = "date")) |>
+    rename(entry_price = adj_close) |>
+    # join exit price
+    left_join(prices_df, by = c("ticker", "close_date" = "date")) |>
+    rename(exit_price = adj_close) |>
+    # compute returns and signed gain_or_loss using buy_or_sell (1 for long, -1 for short)
     mutate(
-      open_date = as.Date(date),
-      close_date = open_date + days(hold_days)
+      price_return = (exit_price - entry_price) / entry_price,
+      gain_or_loss = price_return * buy_or_sell
     ) |>
+    # drop signals lacking price data
+    filter(!is.na(entry_price) & !is.na(exit_price)) |>
     arrange(open_date)
 
   # Build SPY price series aligned to the simulation date range (used for idle-capital valuation and conversions)
@@ -51,31 +73,25 @@ simulate_strategy <- function(
     arrange(date) |>
     tidyr::fill(adj_close, .direction = "down")
 
-  # if SPY price still missing at very start, use first available SPY price
   if (is.na(spy_on_sim_dates$adj_close[1])) {
     first_spy <- spy_prices$adj_close[1]
     spy_on_sim_dates <- spy_on_sim_dates |>
       mutate(adj_close = if_else(is.na(adj_close), first_spy, adj_close))
   }
 
-  # fast lookup
   spy_price_map <- setNames(
     spy_on_sim_dates$adj_close,
     as.character(spy_on_sim_dates$date)
   )
 
-  # bookkeeping
+  # bookkeeping for idle capital
   start_spy_price <- spy_on_sim_dates$adj_close[1]
-
   if (invest_idle_in == "SPY") {
-    # idle capital held in fractional SPY shares
     idle_spy_shares <- initial_capital / start_spy_price
     idle_cash <- NULL
   } else {
-    # idle capital held as cash that accrues at risk-free rate
     idle_cash <- initial_capital
     idle_spy_shares <- NULL
-    # daily compounding factor
     daily_rf <- (1 + risk_free_rate)^(1 / 365.25) - 1
   }
 
@@ -83,13 +99,12 @@ simulate_strategy <- function(
   active_positions <- tibble()
   trades_executed <- tibble()
 
-  # daily loop: close then open
+  # daily loop
   daily_log_list <- vector("list", length(all_dates))
   for (i in seq_along(all_dates)) {
     today <- as.Date(all_dates[i])
     current_spy_price <- as.numeric(spy_price_map[as.character(today)])
 
-    # accrue interest on idle cash at start of day (cash mode)
     if (invest_idle_in == "cash") {
       idle_cash <- idle_cash * (1 + daily_rf)
     }
@@ -100,16 +115,13 @@ simulate_strategy <- function(
       if (length(to_close_idx) > 0) {
         closing <- active_positions[to_close_idx, , drop = FALSE]
 
-        # proceeds in dollars from each trade
         proceeds_dollars <- closing$trade_size * (1 + closing$gain_or_loss)
         profit_dollars <- proceeds_dollars - closing$trade_size
 
         if (invest_idle_in == "SPY") {
-          # convert proceeds to SPY shares at today's price and add to idle holdings
           shares_bought <- proceeds_dollars / current_spy_price
           idle_spy_shares <- idle_spy_shares + sum(shares_bought)
         } else {
-          # add proceeds to idle cash
           idle_cash <- idle_cash + sum(as.numeric(proceeds_dollars))
         }
 
@@ -127,7 +139,7 @@ simulate_strategy <- function(
       }
     }
 
-    # Open new trades signalled today (in order).
+    # Open new trades signalled today
     todays_signals <- trades |> filter(open_date == today)
     if (nrow(todays_signals) > 0) {
       for (r in seq_len(nrow(todays_signals))) {
@@ -136,35 +148,23 @@ simulate_strategy <- function(
         if (invest_idle_in == "SPY") {
           idle_value <- idle_spy_shares * current_spy_price
           if (idle_value >= trade_size) {
-            # sell fractional SPY shares to fund the trade
             shares_to_sell <- trade_size / current_spy_price
             idle_spy_shares <- idle_spy_shares - shares_to_sell
-
             invested <- invested + trade_size
-
-            pos <- row |>
-              mutate(trade_size = trade_size)
+            pos <- row |> mutate(trade_size = trade_size)
             active_positions <- bind_rows(active_positions, pos)
-          } else {
-            # skip if not enough idle-SPY value
           }
         } else {
-          # cash mode
           if (idle_cash >= trade_size) {
             idle_cash <- idle_cash - trade_size
             invested <- invested + trade_size
-
-            pos <- row |>
-              mutate(trade_size = trade_size)
+            pos <- row |> mutate(trade_size = trade_size)
             active_positions <- bind_rows(active_positions, pos)
-          } else {
-            # skip if not enough cash
           }
         }
       }
     }
 
-    # equity = value of idle holdings + principal locked in active trades
     if (invest_idle_in == "SPY") {
       idle_value_today <- idle_spy_shares * current_spy_price
       equity_today <- idle_value_today + invested
@@ -194,26 +194,22 @@ simulate_strategy <- function(
 
   daily_log <- bind_rows(daily_log_list)
 
-  # finalize: if any remaining active_positions never closed within window, mark NA for proceeds/profit
   if (nrow(active_positions) > 0) {
     still_open <- active_positions |>
       mutate(proceeds = NA_real_, profit = NA_real_)
     trades_executed <- bind_rows(trades_executed, still_open)
   }
 
-  # Build trade blotter (one row per executed trade)
   trade_blotter <- trades_executed |>
     as_tibble() |>
-    mutate(
-      open_date = as.Date(open_date),
-      close_date = as.Date(close_date),
-      trade_id = row_number()
-    ) |>
+    mutate(trade_id = row_number()) |>
     select(
       trade_id,
       ticker,
       open_date,
       close_date,
+      entry_price,
+      exit_price,
       trade_size,
       buy_or_sell,
       gain_or_loss,
@@ -222,12 +218,12 @@ simulate_strategy <- function(
     ) |>
     arrange(open_date)
 
-  # Build SPY buy-and-hold series for comparison (initial_capital invested at start)
+  # SPY buy-and-hold series (for plotting when idle invested in SPY)
   spy_shares_bh <- initial_capital / start_spy_price
   spy_series <- spy_on_sim_dates |>
     mutate(spy_equity = spy_shares_bh * adj_close)
 
-  # mountain chart: strategy equity vs SPY buy-and-hold
+  # mountain plot: include SPY series only when idle capital held in SPY
   if (invest_idle_in == "SPY") {
     plot_df <- daily_log |>
       select(date, equity) |>
@@ -235,7 +231,7 @@ simulate_strategy <- function(
 
     mountain_plot <- ggplot(plot_df, aes(x = date)) +
       geom_area(aes(y = equity), fill = "#2c7fb8", alpha = 0.25) +
-      geom_line(aes(y = equity), color = "#0868ac", size = 1) +
+      geom_line(aes(y = equity), color = "#0868ac", linewidth = 1) +
       geom_line(
         aes(y = spy_equity),
         color = "#a50f15",
@@ -244,7 +240,7 @@ simulate_strategy <- function(
       ) +
       labs(
         title = paste0(
-          "Strategy Equity (area) vs SPY Buy-and-Hold (dashed) — idle invested in: ",
+          "Strategy Equity (area) vs SPY Buy-and-Hold — idle: ",
           invest_idle_in
         ),
         x = "Date",
@@ -259,10 +255,7 @@ simulate_strategy <- function(
       geom_area(aes(y = equity), fill = "#2c7fb8", alpha = 0.25) +
       geom_line(aes(y = equity), color = "#0868ac", size = 1) +
       labs(
-        title = paste0(
-          "Strategy Equity (area) — idle invested in: ",
-          invest_idle_in
-        ),
+        title = paste0("Strategy Equity (area) — idle: ", invest_idle_in),
         x = "Date",
         y = "Capital ($)"
       ) +
@@ -277,6 +270,7 @@ simulate_strategy <- function(
     mountain_plot = mountain_plot
   )
 }
+
 # Example usage (assumes recommendations and prices_df are present in environment):
 sim_out <- simulate_strategy(
   all_recs_limited,
@@ -284,11 +278,11 @@ sim_out <- simulate_strategy(
   initial_capital,
   trade_size,
   hold_days,
-  invest_idle_in = "cash"
+  invest_idle_in
 )
 
-sim_out$trade_blotter
 sim_out$mountain_plot
+sim_out$trade_blotter
 sim_out$daily_series
 
 # compute compound annual growth rate (CAGR) for strategy and SPY buy-and-hold

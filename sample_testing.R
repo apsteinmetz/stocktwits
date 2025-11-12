@@ -149,7 +149,7 @@ get_significanct_posters <- function(win_rate) {
 }
 
 # make trade history for the selected date window
-CREATE_WINDOWED_RECORDS <- TRUE
+CREATE_WINDOWED_RECORDS <- FALSE
 if (CREATE_WINDOWED_RECORDS) {
   all_windows <- list()
   for (window_index in 1:nrow(date_windows)) {
@@ -208,10 +208,6 @@ if (CREATE_WINDOWED_RECORDS) {
   cat("Loading precomputed windowed records...\n")
   all_windows_df <- read_parquet_duckdb("data/skill_90_30.parquet")
 }
-all_windows[[125]] |>
-  filter(ticker == "OCGN", date == as.Date("2021-01-04")) |>
-  head(10)
-
 
 # test results with a smaller trade volume
 all_windows_df_limited <- all_windows_df |>

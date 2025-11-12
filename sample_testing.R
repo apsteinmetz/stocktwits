@@ -214,7 +214,7 @@ all_windows_df_limited <- all_windows_df |>
   # limit windows to after stocktwits has more than 1000 valid posts per window
   filter(window > 30) |>
   # limit windows to buy only
-  filter(buy_or_sell == 1) |>
+  # filter(buy_or_sell == 1) |>
   as_tibble() |>
   arrange(date) |>
   # limit trades first 100 signals per month
@@ -274,12 +274,46 @@ result_history |>
   theme_minimal()
 
 
-all_windows_df |>
+trade_summary <- all_windows_df |>
   summarise(
     .by = c(bullish, alpha_direction),
     trades = n(),
     median_gain = median(gain_or_loss)
   )
+# heatmap of gain by bullish and alpha_direction
+# bullish on x axis, alpha_direction on y axis and trades in fill
+
+trade_summary |>
+  ggplot(aes(x = as.factor(bullish), y = as.factor(alpha_direction))) +
+  geom_tile(aes(fill = median_gain), color = "white") +
+  scale_fill_gradient2(
+    low = "red",
+    mid = "white",
+    high = "darkgreen",
+    midpoint = 0,
+    name = "Median Trade Gain",
+    labels = scales::label_percent(accuracy = 0.1)
+  ) +
+  # format labels with commas
+  geom_text(
+    aes(label = paste(format(trades, big.mark = ","), "Trades")),
+    color = "black",
+    size = 5
+  ) +
+  scale_x_discrete(
+    labels = c("FALSE" = "Bearish", "TRUE" = "Bullish")
+  ) +
+  scale_y_discrete(
+    labels = c("-1" = "Negative", "1" = "Positive", "0" = "Neutral")
+  ) +
+  labs(
+    title = "Median Gain by Sentiment and Alpha Direction",
+    x = "Sentiment",
+    y = "Alpha"
+  ) +
+  theme_minimal()
+
+
 all_windows_df |>
   summarise(
     count = n(),
@@ -295,6 +329,7 @@ all_windows_df_limited |>
     median_gain = median(gain_or_loss),
     mean_gain = mean(gain_or_loss)
   )
+
 
 all_recs_limited <- all_windows_df_limited |>
   select(ticker, date, buy_or_sell) |>

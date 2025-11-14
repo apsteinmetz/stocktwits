@@ -35,22 +35,34 @@ get_significanct_posters <- function(win_rate) {
         win_rate < 0.5 ~ -1,
         TRUE ~ 0
       ))
-    )
+    ) |>
+    select(-p_value)
 
   return(significant_posters)
 }
 
-significant_posters <- get_significanct_posters(bear_win_rate)
+# separate bulls from bears in plot
+significant_posters <- get_significanct_posters(bear_win_rate) |>
+  mutate(sentiment = "bearish") |>
+  bind_rows(
+    get_significanct_posters(bull_win_rate) |>
+      mutate(sentiment = "bullish")
+  ) |>
+  mutate(sentiment = as.factor(sentiment))
 
-significant_posters |>
-  ggplot(aes(x = win_rate)) +
-  geom_histogram(binwidth = 0.01, fill = "blue", color = "black") +
+gg <- significant_posters |>
+  ggplot(aes(x = win_rate, fill = sentiment)) +
+  geom_histogram(binwidth = 0.01, position = "stack", color = "black") +
+  scale_fill_manual(
+    name = "Sentiment",
+    values = c("bearish" = "#D55E00", "bullish" = "#009E73")
+  ) +
   labs(
-    title = "Histogram of Batting Averages for Statistically Significant Posters",
+    title = "There are far more Bullish Posts and Far More Posters with Negative Skill",
+    subtitle = "Histogram of Batting Averages for Statistically Significant Posters",
     x = "Batting Average",
     y = "Count"
   ) +
-  # add vertical line at 0.5
   geom_vline(
     xintercept = 0.5,
     linetype = "dashed",
@@ -58,54 +70,108 @@ significant_posters |>
     linewidth = 2
   ) +
   theme_minimal()
+print(gg)
 
 cat(
   "posters with win rates statistically different from random chance (p < 0.05):\n\n"
 )
-significant_posters |>
-  select(user_id, total, wins_absolute, win_rate, p_value, direction) |>
-  print()
-
 cat("\nSummary:\n")
-cat(paste("Total posters tested:", nrow(results), "\n"))
+cat(paste("Total posters tested:", summarise(track_record, n()), "\n"))
 cat(paste(
   "posters significantly different from chance:",
   nrow(significant_posters),
   "\n"
 ))
 cat(paste(
-  "posters significantly above chance (win_rate > 0.5):",
-  sum(significant_posters$direction == "Above chance"),
+  "posters significantly better than chance (win_rate > 0.5):",
+  nrow(filter(significant_posters, alpha_direction == 1)),
   "\n"
 ))
 cat(paste(
-  "posters significantly below chance (win_rate < 0.5):",
-  sum(significant_posters$direction == "Below chance"),
+  "posters significantly better than chance (win_rate > 0.5):",
+  nrow(filter(significant_posters, alpha_direction == -1)),
   "\n"
 ))
 
-# make a table of the summary using gt
+# make a table of the summary using gt with bearish/bullish counts
+total_tested <- track_record |>
+  summarise(total = n()) |>
+  collect() |>
+  pull(total)
+sentiment_count <- track_record |>
+  summarise(.by = bullish, total = n()) |>
+  collect()
+bullish_total <- pull(
+  filter(sentiment_count, bullish == TRUE),
+  total
+)
+bearish_total <- pull(
+  filter(sentiment_count, bullish == FALSE),
+  total
+)
+
+significant_total <- nrow(significant_posters)
+significant_bearish <- significant_posters |>
+  filter(sentiment == "bearish") |>
+  nrow()
+significant_bullish <- significant_posters |>
+  filter(sentiment == "bullish") |>
+  nrow()
+
+above_total <- significant_posters |>
+  filter(alpha_direction == 1) |>
+  nrow()
+above_bearish <- significant_posters |>
+  filter(alpha_direction == 1, sentiment == "bearish") |>
+  nrow()
+above_bullish <- significant_posters |>
+  filter(alpha_direction == 1, sentiment == "bullish") |>
+  nrow()
+
+below_total <- significant_posters |>
+  filter(alpha_direction == -1) |>
+  nrow()
+below_bearish <- significant_posters |>
+  filter(alpha_direction == -1, sentiment == "bearish") |>
+  nrow()
+below_bullish <- significant_posters |>
+  filter(alpha_direction == -1, sentiment == "bullish") |>
+  nrow()
+
 summary_table <- tibble(
   Metric = c(
     "Total posters tested",
     "posters significantly different from chance",
-    "posters significantly above chance (win_rate > 0.5)",
-    "posters significantly below chance (win_rate < 0.5)"
+    "posters significantly better than .500",
+    "posters significantly worse than .500"
   ),
   Count = c(
-    nrow(results),
-    nrow(significant_posters),
-    sum(significant_posters$direction == "Above chance"),
-    sum(significant_posters$direction == "Below chance")
+    total_tested,
+    significant_total,
+    above_total,
+    below_total
+  ),
+  Bearish = c(
+    bearish_total,
+    significant_bearish,
+    above_bearish,
+    below_bearish
+  ),
+  Bullish = c(
+    bullish_total,
+    significant_bullish,
+    above_bullish,
+    below_bullish
   )
 )
+
 summary_table |>
   gt() |>
   tab_header(
     title = "Summary of User Win Rate Statistical Tests"
   ) |>
   fmt_number(
-    columns = c(Count),
+    columns = c(Count, Bearish, Bullish),
     decimals = 0
   ) |>
   print()

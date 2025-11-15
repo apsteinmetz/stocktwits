@@ -39,6 +39,7 @@ annotations <- Map(
   unname()
 
 fig <- plot_ly(
+  title = list(text = "Post Count Funnel", font = list(size = 22)),
   type = "funnelarea",
   # show only numeric values inside each slice
   textinfo = "value",
@@ -48,10 +49,7 @@ fig <- plot_ly(
   values = values
 ) %>%
   layout(
-    title = list(text = "Post Count Funnel", font = list(size = 22)),
     annotations = annotations,
     margin = list(l = 260) # leave room on the left for the labels
   )
-
 fig
-# ...existing code...

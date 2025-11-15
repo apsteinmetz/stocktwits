@@ -4,8 +4,11 @@ format: html
 bibliography: refs.bibtex
 link-citations: true
 ---
+
 # Making Money by Being Wrong
+
 ## Introduction
+
 Picking stocks that will go up is hard. Picking stocks that will go down is also hard. Furthermore, listening to what randos on social media say about which stocks will go up or down doesn't seem like a good strategy. Now suppose we do the opposite of what the randos say. Can we make money that way? In, preview, "Yes."
 
 I was struck by [this column](https://www.bloomberg.com/opinion/newsletters/2025-10-14/venture-global-s-gas-plant-is-done) by Matt Levine on Bloomberg which refers to an academic paper by Aaron Kaufman, Jax Li and Nasser Alansari, "StockTwits: Comprehensive records of a financial social media platform from 2008 to 2022."[@Li_Al_Ansari_Kaufman_2025] In it the authors analyze the sentiment of 550 million (!) posts on StockTwits, a social media platform for traders and investors. Please refer to the paper for how the authors did their sentiment analysis. They find that some users do statistically better than guessing and some do statistically worse. The bad pickers have negative "alpha." In this post we well set out to see if we can make money by following what the "good" pickers say and doing the opposite of what the "bad" pickers say whether their sentiment is bullish or bearish.
@@ -17,10 +20,13 @@ I commend the authors of the paper for providing access to the complete data set
 :::
 
 ## The plan
-First we need to access the data which is stored as a number of CSV format files in an Amazon AWS S3  bucket.  These are freely available public files.  They take up gigabytes of storage so we might not bring them all into memory at once.  I recommend using the Duckplyr package in R to manage the data.  
 
-There are over 500 million posts in the total data set but the study authors have used sentiment analysis to identify those posts which have both a stock ticker symbol and a bullish or bearish sentiment.  This reduces the data set to about 100 million posts.  This is the dataset we will download.  We can further winnow the data so that the users and tickers we analyze have a minimum number of mentions.
+First we need to access the data which is stored as a number of CSV format files in an Amazon AWS S3 bucket. These are freely available public files. They take up gigabytes of storage so we might not bring them all into memory at once. I recommend using the Duckplyr package in R to manage the data.
 
-Then we'll see if we can duplicate the findings of the paper in identifying the existance of statistically good or bad  pickers over the whole range of the data.
+There are over 500 million posts in the total data set but the study authors have used sentiment analysis to identify those posts which have both a stock ticker symbol and a bullish or bearish sentiment. This reduces the data set to about 100 million posts. This is the dataset we will download. We can further winnow the data so that the users and tickers we analyze have a minimum number of mentions.
+
+![](funnel.jpg)
+
+Then we'll see if we can duplicate the findings of the paper in identifying the existance of statistically good or bad pickers over the whole range of the data.
 
 Finally, we'll see if a trading strategy can be constructed. using out-of-sample data.

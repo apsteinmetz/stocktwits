@@ -22,7 +22,7 @@ sentiments <- sentiments |>
   select(-sentiment)
 summarise(sentiments, n = n())
 
-# expand symbol_list into multiple rows
+# expand python-like symbol_list into multiple rows
 sentiments <- sentiments |>
   mutate(symbol_list = gsub("\\[|\\]|'| ", "", symbol_list)) |>
   collect() |>

@@ -4,9 +4,6 @@ format: html
 bibliography: refs.bibtex
 link-citations: true
 ---
-
-# Making Money by Being Wrong
-
 ## Introduction
 
 Picking stocks that will go up is hard. Picking stocks that will go down is also hard. Furthermore, listening to what randos on social media say about which stocks will go up or down doesn't seem like a good strategy. Now suppose we do the opposite of what the randos say. Can we make money that way? In, preview, "Yes."
@@ -21,12 +18,211 @@ I commend the authors of the paper for providing access to the complete data set
 
 ## The plan
 
-First we need to access the data which is stored as a number of CSV format files in an Amazon AWS S3 bucket. These are freely available public files. They take up gigabytes of storage so we might not bring them all into memory at once. I recommend using the Duckplyr package in R to manage the data.
+First we need to access the data which is stored as a number of CSV format files in an Amazon AWS S3 bucket. These are freely available public files. They take up gigabytes of storage so do not want to bring them all into memory at once. I recommend using DuckDB to manage the data since it lets us work with datasets larger than what will fit in memory.
 
 There are over 500 million posts in the total data set but the study authors have used sentiment analysis to identify those posts which have both a stock ticker symbol and a bullish or bearish sentiment. This reduces the data set to about 100 million posts. This is the dataset we will download. We can further winnow the data so that the users and tickers we analyze have a minimum number of mentions.
 
 ![](funnel.jpg)
 
-Then we'll see if we can duplicate the findings of the paper in identifying the existance of statistically good or bad pickers over the whole range of the data.
+Using Yahoo Finance we will download the price histories of the most popular stocks in our data set. Then we'll see if we can duplicate the findings of the paper in identifying the existence of statistically good or bad pickers over the whole range of the data.
 
 Finally, we'll see if a trading strategy can be constructed. using out-of-sample data.
+
+## Get The Data
+
+The dataset is stored in a number of different formats, each with varying amounts of information. We are only interested in the files which contain a user ID, ticker symbol and sentiment (bullish or bearish) which is the "symbol_sentiments" dataset, stored as 34 CSV files. The files are public so we don't need any login credentials. The heavy lifting of this project is done by DuckDB and the Duckplyr package in R. DuckDB is an SQL-language database management system which can handle very large datasets efficiently without necessarily loading them in memory all at once. Duckplyr is a package which allows us to use the dplyr syntax we know and love while DuckDB is the back end. In theory, you don't even need to download the files locally but I found that downloading them first and then pointing DuckDB to the local files is much faster in practice. The files will take up about one GB of disk space.
+
+```{r load libraries}
+#| code-fold: true
+#| warning: false
+#| message: false
+# load libraries
+library(tidyverse)
+library(duckdb)
+library(duckplyr)
+library(gt)
+```
+
+```{r download data}
+#| eval: false
+#| code-fold: true
+
+# Create DuckDB connection with S3 support
+con <- dbConnect(duckdb())
+
+# Tell DuckDB we are getting files from S3 in us-west-2 region
+dbExecute(con, "INSTALL httpfs;")
+dbExecute(con, "LOAD httpfs;")
+dbExecute(con, "SET s3_region='us-west-2';")
+
+BASE_URL <- "https://stocktwits-nyu.s3.amazonaws.com/dataset/v1/data/csv/"
+DATASET <- "symbol_sentiments"
+STEM_URL <- paste0(BASE_URL, DATASET, "/", DATASET, "_")
+# make data subdirectory if it doesn't exist
+if (!dir.exists("data")) dir.create("data")
+get_sentiment_file <- function(file_num) {
+  file_num_str <- sprintf("%02d", file_num)
+  csv_url <- paste0(STEM_URL, file_num_str, ".csv")
+  parquet_filename <- paste0("data/", DATASET, "_", file_num_str, ".parquet")
+  # Read CSV directly from S3 using DuckDB's HTTP support
+  query <- paste0("SELECT * FROM read_csv_auto('", csv_url, "')")
+  # Execute query and get as duckplyr dataframe
+  df <- dbGetQuery(con, query) |>
+    as_duckdb_tibble() |>
+    compute_parquet(parquet_filename)
+  print(paste(parquet_filename,format(file.info(parquet_filename)$size),"bytes") )
+}
+# there are 34 csv files in the S3 bucket for symbol_sentiments
+walk(0:33, get_sentiment_file)
+```
+
+If all goes well we'll have 34 parquet-format files in a 'data' subfolder (Parquet is a column-oriented file stroage format suited for large datasets). Now comes the fun part, data cleaning. Each post might mention multiple tickers so we need to explode the data so that each row contains only one ticker symbol. We can then see that some users might post multiple times about the same ticker on the same day, trying to hype the stock in real time. I think one mention per user per ticker per day will suffice.
+
+::: callout-tip
+When using duckplyr, operations are "lazy". Nothing is actually computed until necessary. This allows you to chain together multiple operations without having to create intermediate datasets. Do use duckplyr's verbs where possible to take advantage of this feature. For instance, if you want to query the size of the dataset, use `summarise()` rather than `nrow()`. The former will compute a single-row data frame, while the latter will pull the entire dataset into memory.
+:::
+
+```{r clean data}
+#| eval: false
+#| code-fold: true
+cat("Loading sentiment data...\n")
+sentiments <- duckplyr::read_parquet_duckdb( "data/symbol_sentiments_*.parquet" )
+summarise(sentiments, n = n())
+
+# use only necessary columns and convert types to save memory
+sentiments <- sentiments |>
+  select(-message_id) |>
+  mutate(user_id = as.integer(user_id)) |>
+  # convert sentiment to boolean within duckplyr to save some space
+  # not bullish  means bearish
+  mutate(bullish = sentiment == 1) |>
+  select(-sentiment)
+# expand python-like symbol_list into multiple rows. This will take some time.
+cat("Expanding posts mentioning multiple tickers...\n")
+sentiments <- sentiments |>
+  mutate(symbol_list = gsub("\\[|\\]|'| ", "", symbol_list)) |>
+  collect() |>
+  separate_longer_delim(symbol_list, delim = ",") |>
+  as_duckdb_tibble() |>
+  # retain only rows with valid symbols (A-Z, 1-5 characters)
+  filter(grepl("^[A-Z]{1,5}$", symbol_list)) |>
+  rename(date = created_at, ticker = symbol_list)
+
+# when people post multiple messages about the same ticker on the same day, filter out.
+sentiments <- sentiments |>
+  distinct(user_id, ticker, date, bullish, .keep_all = TRUE)  |> 
+  # save cleaned data
+  compute_parquet("data/sentiments_cleaned.parquet")
+
+summarise(sentiments, n = n())
+```
+
+So far we have winnowed the data set down to roughly 50 million rows. Ultimately, we will create sliding window sample sets and we want to have a valid sample size in each window. Accordingly, we can filter out posts that are not likely to be statistically useful. While somewhat arbitrary, let's limit the number of stocks to the 500 top-mentioned common stock tickers and keep only the user IDs that have posted more than 100 times and were active for more than six months. Note we have omitted cryptocurrencies, which are also popular on StockTwits.
+
+```{r filter sentiments}
+#| eval: false
+#| code-fold: true
+MIN_POSTS <- 100
+MIN_DAYS <- 180 # were they active over at least 6 months
+NUM_TICKERS <- 500
+
+# determine the most popular tickers
+popular_tickers <- sentiments |>
+summarise(
+    .by = ticker,
+    count = n(),
+    start_date = min(date),
+    end_date = max(date)
+    )   |>
+  arrange(desc(count)) |>
+  slice_head(n=NUM_TICKERS) |> 
+  # save popular tickers to download price data later
+compute_parquet("data/popular_tickers.parquet")
+
+# include only the most popular tickers
+sentiments <- popular_tickers |>
+  select(ticker) |>
+  inner_join(sentiments, by = "ticker")
+
+summarise(sentiments, n = n())
+
+# only include user_ids with at least 200 entries
+sentiments <- sentiments |>
+  summarise(
+    .by = user_id,
+    date_range = max(date) - min(date),
+    count = n()
+  ) |>
+  inner_join((sentiments), by = "user_id")
+summarise(sentiments, n = n())
+
+sentiments <- sentiments |>
+  filter(count >= MIN_POSTS, date_range >= MIN_DAYS) |>
+  select(-date_range, -count)
+
+summarise(sentiments, n = n())
+
+compute_parquet(sentiments, "data/sentiments_filtered.parquet")
+```
+
+What we have now is a dataset where each post has a unique user ID, ticker, post date and sentiment. Where sentiment is TRUE for bullish and FALSE for bearish.
+
+```{r show sample posts}
+#| code-fold: true
+sentiments <- read_parquet_duckdb("data/sentiments_filtered.parquet")
+
+slice_head(sentiments, n = 10) |> 
+  collect() |> 
+  gt::gt() |> 
+  # add title
+  gt::tab_header(
+    title = "Sample StockTwits Posts After Cleaning and Filtering"
+  )
+```
+
+Looking at the most popular tickers we see a mix of large cap stocks like AAPL, TSLA and AMZN, meme stocks like GME , NIO and AMC, along with SPY, the S&P 500 index.
+
+```{r show popular tickers}
+#| code-fold: true
+popular_tickers <- read_parquet_duckdb("data/popular_tickers.parquet")
+head(popular_tickers,n=10) |> 
+  gt::gt() |>  
+  # add title
+  gt::tab_header(
+    title = "Most Popular StockTwits Tickers"
+  ) |> 
+  gt::fmt_number(
+    columns = c(count),
+    decimals = 0
+  )
+```
+
+Interestingly, like Charles Dickens and earthquakes, the relative frequency of top ticker mentions follows [Zipf's law](https://en.wikipedia.org/wiki/Zipf%27s_law), where the rank of mentions increases logarithmically. This is indicative of a "[preferential attachment process](https://en.wikipedia.org/wiki/Preferential_attachment)". The Stocktwits like to pile on, in other words.
+
+```{r show zipfs law}
+#| code-fold: true
+#| message: false
+# show popular tickers on a log/log frequency plot
+popular_tickers <- popular_tickers |>
+  arrange(desc(count)) |>
+  mutate(rank = row_number())
+popular_tickers |>
+  ggplot(aes(x = rank, y = count)) +
+  geom_point() +
+  scale_x_log10(limits = c(1,1000)) +
+  scale_y_log10(labels = scales::comma) +
+  # add labels for top 10 tickers
+  geom_text(
+    data = popular_tickers |> slice_head(n = 10),
+    aes(label = ticker),
+    vjust = -1,
+    size = 3
+  ) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs( 
+    title = "Popularity Begets Popularity",
+    subtitle = "Rank Frequency Plot of Top 500 StockTwits Ticker Mentions",
+    x = "Rank of Ticker by Mentions (log scale)",
+    y = "Number of Mentions (log scale)"
+  )
+```

@@ -1,5 +1,5 @@
 # Load required libraries
-library(dplyr)
+library(tidyverse)
 library(duckdb)
 library(duckplyr)
 
@@ -18,7 +18,30 @@ BASE_URL <- "https://stocktwits-nyu.s3.amazonaws.com/dataset/v1/data/csv/"
 DATASET <- "symbol_sentiments"
 STEM_URL <- paste0(BASE_URL, DATASET, "/", DATASET, "_")
 
+get_sentiment_file <- function(file_num) {
+  file_num_str <- sprintf("%02d", file_num)
+  csv_url <- paste0(STEM_URL, file_num_str, ".csv")
+  parquet_filename <- paste0("data/", DATASET, "_", file_num_str, ".parquet")
+  # Read CSV directly from S3 using DuckDB's HTTP support
+  query <- paste0("SELECT * FROM read_csv_auto('", csv_url, "')")
+  # Execute query and get as duckplyr dataframe
+  df <- dbGetQuery(con, query) |>
+    as_duckdb_tibble() |>
+    compute_parquet(parquet_filename)
+  print(paste(
+    parquet_filename,
+    format(file.info(parquet_filename)$size),
+    "bytes"
+  ))
+}
+
+# there are 34 csv files in the S3 bucket for symbol_sentiments
+walk(0:33, get_sentiment_file)
+
+
+# ALTERNATIVELY
 # Function to download and process symbol_sentiments files using duckplyr
+# with more robust error handling
 download_and_save_symbol_files <- function(file_numbers) {
   results <- list()
 

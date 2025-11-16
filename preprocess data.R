@@ -36,7 +36,9 @@ summarise(sentiments, n = n())
 
 # when people post multiple messages about the same ticker on the same day, filter out.
 sentiments <- sentiments |>
-  distinct(user_id, ticker, date, bullish, .keep_all = TRUE)
+  distinct(user_id, ticker, date, bullish, .keep_all = TRUE) |>
+  # save cleaned data
+  compute_parquet("data/sentiments_cleaned.parquet")
 
 summarise(sentiments, n = n())
 

@@ -76,10 +76,14 @@ get_sentiment_file <- function(file_num) {
 walk(0:33, get_sentiment_file)
 ```
 
-If all goes well we'll have 34 parquet-format files in a 'data' subfolder (Parquet is a column-oriented file stroage format suited for large datasets). Now comes the fun part, data cleaning. Each post might mention multiple tickers so we need to explode the data so that each row contains only one ticker symbol. We can then see that some users might post multiple times about the same ticker on the same day, trying to hype the stock in real time. I think one mention per user per ticker per day will suffice.
+If all goes well we'll have 34 parquet-format files in a 'data' subfolder . Now comes the fun part, data cleaning. Each post might mention multiple tickers so we need to explode the data so that each row contains only one ticker symbol. We can then see that some users might post multiple times about the same ticker on the same day, trying to hype the stock in real time. I think one mention per user per ticker per day will suffice.
 
 ::: callout-tip
-When using duckplyr, operations are "lazy". Nothing is actually computed until necessary. This allows you to chain together multiple operations without having to create intermediate datasets. Do use duckplyr's verbs where possible to take advantage of this feature. For instance, if you want to query the size of the dataset, use `summarise()` rather than `nrow()`. The former will compute a single-row data frame, while the latter will pull the entire dataset into memory.
+I prefer to use the Dplyr vernacular when working in R. When using any large data frame, I recommend using a Duckplyr/DuckDB/Parquet-files workflow. Duckplyr is a package which translates Dplyr verbs into SQL queries executed by DuckDB. This allows you to work with datasets larger than memory without having to learn SQL. If you are familiar with Dplyr, Duckplyr will feel very natural. Parquet is a column-oriented file stroage format suited for large datasets.
+
+There is a notion that if you can fit a dataset into memory, a database like DuckDB is not a time saver.  I disagree.  Further, Duckplyr is the best database frontend package for R.   You see my discussion on the relative performance of database packages [here](https://outsiderdata.netlify.app/posts/2024-04-10-the-truth-about-tidy-wrappers/benchmark_wrappers).
+
+When using Duckplyr, operations are "lazy". Nothing is actually computed until necessary. This allows you to chain together multiple operations without having to create intermediate datasets. Do use Duckplyr's verbs where possible to take advantage of this feature. For instance, if you want to query the size of the dataset, use `summarise()` rather than `nrow()`. The former will compute a single-row data frame, while the latter will pull the entire dataset into memory.
 :::
 
 ```{r clean data}
@@ -197,7 +201,7 @@ head(popular_tickers,n=10) |>
   )
 ```
 
-Interestingly, like Charles Dickens and earthquakes, the relative frequency of top ticker mentions follows [Zipf's law](https://en.wikipedia.org/wiki/Zipf%27s_law), where the rank of mentions increases logarithmically. This is indicative of a "[preferential attachment process](https://en.wikipedia.org/wiki/Preferential_attachment)". The Stocktwits like to pile on, in other words.
+Interestingly, like Charles Dickens and earthquakes, the relative frequency of top ticker mentions follows [Zipf's law](https://en.wikipedia.org/wiki/Zipf%27s_law), where the rank of mentions varies logarithmically with the number of mentions. This is indicative of a "[preferential attachment process](https://en.wikipedia.org/wiki/Preferential_attachment)". The Stocktwits like to pile on, in other words.
 
 ```{r show zipfs law}
 #| code-fold: true
@@ -226,3 +230,46 @@ popular_tickers |>
     y = "Number of Mentions (log scale)"
   )
 ```
+## Download Price Data
+Now let's download price data for the popular tickers for the date windows  where they are mentioned in the StockTwits posts.  We can get historical price data from Yahoo Finance.  While we will search for the 500 top tickers, some tickers may not be found on Yahoo Finance. We'll skip those tickers. 
+
+```{r }
+#| eval: false
+#| code-fold: true
+library(yahoofinancer)
+# function to download prices
+ticker_hist <- function(ticker, start_date, end_date, interval_pd = "1d") {
+  ticker_obj <- Ticker$new(ticker)
+  px_hist <- ticker_obj$get_history(
+    interval = interval_pd,
+    start = start_date,
+    end = end_date + 7 # buffer to include week after last mention
+  )  |>  
+    mutate(date = as.Date(date))
+  return(px_hist)
+}
+# we saved  popular tickers earlier
+popular_tickers <- read_parquet_duckdb("data/popular_tickers.parquet")
+all_prices <- list()
+start_row <- 1
+for (i in start_row:nrow(popular_tickers)) {
+  ticker <- popular_tickers$ticker[i]
+  start_date <- popular_tickers$start_date[i]
+  end_date <- popular_tickers$end_date[i]
+  print(paste( "Downloading prices for", ticker, "from", start_date,"to", end_date))
+  prices <- ticker_hist(ticker, start_date, end_date)
+  # Check if API request failed
+  if (is.null(prices) || nrow(prices) == 0) {
+    print(paste("Error: Failed to download prices for", ticker))
+    next # Skip to next ticker
+  }
+    all_prices[[ticker]] <- prices
+}
+# combine all prices into a single data frame and save
+prices_df <- bind_rows(all_prices, .id = "ticker") |> 
+  duckplyr::compute_parquet(prices_df, "price_history_top500.parquet")
+```
+::: callout-note
+Tidyverse experts will question why I used a `for()` loop instead of the `purrr::map()` function. When getting data from an external source, I don't want to lose progress if one of the calls fails in a way I didn't anticipate. Using a for loop lets me fix the error and resume from the last successful call by manually setting the start index rather than having to start over.
+:::
+

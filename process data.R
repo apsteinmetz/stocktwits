@@ -1,7 +1,6 @@
 # preprocess data
 library(tidyverse)
 library(duckplyr)
-library(yahoofinancer)
 library(lubridate)
 
 # READ AND PROCESS SENTIMENT DATA ==============================

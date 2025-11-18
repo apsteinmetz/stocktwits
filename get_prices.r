@@ -42,6 +42,8 @@ for (i in start_row:nrow(popular_tickers)) {
   }
   all_prices[[ticker]] <- prices
 }
+
+
 # combine all prices into a single data frame
 # with ticker as a column
 prices_df <- bind_rows(all_prices, .id = "ticker") |>

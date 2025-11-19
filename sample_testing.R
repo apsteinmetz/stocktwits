@@ -236,7 +236,6 @@ all_windows_df_limited <- all_windows_df |>
   ) |>
   mutate(gain_or_loss_minus_spy = gain_or_loss - spy_pct_change_7d)
 
-
 result_history <- all_windows_df_limited |>
   summarise(
     .by = window,
@@ -257,7 +256,7 @@ result_history |>
   geom_point(color = "red", size = 2) +
   geom_hline(yintercept = 0, linewidth = 1) +
   labs(
-    title = "Median Gain in Month After 3-Month Sentiment Sample",
+    title = "Median 7-Day Gain in Month After 3-Month Sample",
     x = "Window Start Date",
     y = "Median Gain/Loss per Trade"
   ) +
@@ -268,7 +267,7 @@ result_history |>
   ggplot(aes(x = start_date, y = trades)) +
   geom_line(color = "blue", size = 2) +
   labs(
-    title = "Number of Trades in Month After 3-Month Sentiment Sample",
+    title = "Number of Trades in Month After 3-Month Sample",
     x = "Window Start Date",
     y = "Number of Trades"
   ) +

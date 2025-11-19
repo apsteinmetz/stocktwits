@@ -17,6 +17,31 @@ hold_days <- 7
 risk_free_rate <- 0.02
 invest_idle_in <- "SPY" # or "SPY"
 
+compute_capm_stats <- function(daily_series, spy_series) {
+  merged <- daily_series |>
+    select(date, equity) |>
+    left_join(spy_series |> select(date, spy_equity), by = "date")
+  merged <- merged |>
+    arrange(date) |>
+    mutate(
+      equity_return = (equity / lag(equity)) - 1,
+      spy_return = (spy_equity / lag(spy_equity)) - 1
+    ) |>
+    filter(!is.na(equity_return) & !is.na(spy_return))
+  model <- lm(equity_return ~ spy_return, data = merged)
+  summary_model <- summary(model)
+  beta <- summary_model$coefficients["spy_return", "Estimate"]
+  alpha <- summary_model$coefficients["(Intercept)", "Estimate"]
+  # annulize alpha and beta
+  alpha <- (1 + alpha)^252 - 1
+  r_squared <- summary_model$r.squared
+  tibble(
+    alpha = alpha,
+    beta = beta,
+    r_squared = r_squared
+  )
+}
+
 simulate_strategy <- function(
   recommendations,
   prices_df,
@@ -309,31 +334,50 @@ cagr_results <- compute_cagr(sim_out$daily_series, sim_out$spy_series)
 print(cagr_results)
 
 # compute capm stats for trades using sim_out$daily_series$equity and spy_series$spy_equity
-compute_capm_stats <- function(daily_series, spy_series) {
-  merged <- daily_series |>
-    select(date, equity) |>
-    left_join(spy_series |> select(date, spy_equity), by = "date")
-  merged <- merged |>
-    arrange(date) |>
-    mutate(
-      equity_return = (equity / lag(equity)) - 1,
-      spy_return = (spy_equity / lag(spy_equity)) - 1
-    ) |>
-    filter(!is.na(equity_return) & !is.na(spy_return))
-  model <- lm(equity_return ~ spy_return, data = merged)
-  summary_model <- summary(model)
-  beta <- summary_model$coefficients["spy_return", "Estimate"]
-  alpha <- summary_model$coefficients["(Intercept)", "Estimate"]
-  # annulize alpha and beta
-  alpha <- (1 + alpha)^252 - 1
-  r_squared <- summary_model$r.squared
-  tibble(
-    alpha = alpha,
-    beta = beta,
-    r_squared = r_squared
-  )
-}
 capm_results <- compute_capm_stats(sim_out$daily_series, sim_out$spy_series)
 print(capm_results)
 
+# Compute CAPM stats
+capm_results <- compute_capm_stats(sim_out$daily_series, sim_out$spy_series)
 
+# Create annotated plot
+plot_df <- sim_out$daily_series |>
+  select(date, equity) |>
+  left_join(sim_out$spy_series |> select(date, spy_equity), by = "date")
+
+# Create annotation text
+annotation_text <- sprintf(
+  "Annual Alpha: %.2f%%\nBeta: %.2f\nR²: %.2f",
+  capm_results$alpha * 100,
+  capm_results$beta,
+  capm_results$r_squared
+)
+
+mountain_plot <- ggplot(plot_df, aes(x = date)) +
+  geom_area(aes(y = equity), fill = "#2c7fb8", alpha = 0.25) +
+  geom_line(aes(y = equity), color = "#0868ac", linewidth = 1) +
+  geom_line(
+    aes(y = spy_equity),
+    color = "#a50f15",
+    linewidth = 1,
+    linetype = "dashed"
+  ) +
+  annotate(
+    "text",
+    x = min(plot_df$date) + (max(plot_df$date) - min(plot_df$date)) * 0.02,
+    y = max(plot_df$equity, plot_df$spy_equity, na.rm = TRUE) * 0.95,
+    label = annotation_text,
+    hjust = 0,
+    vjust = 1,
+    size = 4,
+    color = "#252525",
+    fontface = "bold"
+  ) +
+  labs(
+    title = paste0("Strategy Equity (area) vs SPY Buy-and-Hold — idle cash: ", invest_idle_in),
+    x = "Date",
+    y = "Capital ($)"
+  ) +
+  theme_minimal()
+
+mountain_plot

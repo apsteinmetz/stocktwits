@@ -278,7 +278,7 @@ sim_out <- simulate_strategy(
   initial_capital,
   trade_size,
   hold_days,
-  invest_idle_in
+  invest_idle_in = "SPY"
 )
 
 sim_out$mountain_plot
@@ -307,3 +307,33 @@ compute_cagr <- function(daily_series, spy_series) {
 }
 cagr_results <- compute_cagr(sim_out$daily_series, sim_out$spy_series)
 print(cagr_results)
+
+# compute capm stats for trades using sim_out$daily_series$equity and spy_series$spy_equity
+compute_capm_stats <- function(daily_series, spy_series) {
+  merged <- daily_series |>
+    select(date, equity) |>
+    left_join(spy_series |> select(date, spy_equity), by = "date")
+  merged <- merged |>
+    arrange(date) |>
+    mutate(
+      equity_return = (equity / lag(equity)) - 1,
+      spy_return = (spy_equity / lag(spy_equity)) - 1
+    ) |>
+    filter(!is.na(equity_return) & !is.na(spy_return))
+  model <- lm(equity_return ~ spy_return, data = merged)
+  summary_model <- summary(model)
+  beta <- summary_model$coefficients["spy_return", "Estimate"]
+  alpha <- summary_model$coefficients["(Intercept)", "Estimate"]
+  # annulize alpha and beta
+  alpha <- (1 + alpha)^252 - 1
+  r_squared <- summary_model$r.squared
+  tibble(
+    alpha = alpha,
+    beta = beta,
+    r_squared = r_squared
+  )
+}
+capm_results <- compute_capm_stats(sim_out$daily_series, sim_out$spy_series)
+print(capm_results)
+
+

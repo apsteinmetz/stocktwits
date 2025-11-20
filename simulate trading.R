@@ -1,5 +1,5 @@
 library(tidyverse)
-# library(duckplyr)
+library(duckplyr)
 
 # load all_recs
 all_recs_limited <- read_parquet_duckdb("data/all_recs_limited.parquet") |>
@@ -9,7 +9,7 @@ prices_df <- read_parquet_duckdb("data/price_history_top500.parquet") |>
   as_tibble() |>
   select(ticker, date, adj_close)
 
-
+methods_restore()
 # simulate strategy: start $10k, $1k per trade, 7-day holds
 initial_capital <- 10000
 trade_size <- 100

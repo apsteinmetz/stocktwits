@@ -260,7 +260,7 @@ simulate_strategy <- function(
       geom_line(
         aes(y = spy_equity),
         color = "#a50f15",
-        size = 1,
+        linewidth = 1,
         linetype = "dashed"
       ) +
       labs(
@@ -296,14 +296,14 @@ simulate_strategy <- function(
   )
 }
 
-# Example usage (assumes recommendations and prices_df are present in environment):
+# Run simulation
 sim_out <- simulate_strategy(
   all_recs_limited,
   prices_df,
   initial_capital,
   trade_size,
   hold_days,
-  invest_idle_in = "SPY"
+  invest_idle_in = "cash"
 )
 
 sim_out$mountain_plot
@@ -374,10 +374,43 @@ mountain_plot <- ggplot(plot_df, aes(x = date)) +
     fontface = "bold"
   ) +
   labs(
-    title = paste0("Strategy Equity (area) vs SPY Buy-and-Hold — idle cash: ", invest_idle_in),
+    title = paste0(
+      "Strategy Equity (area) vs SPY Buy-and-Hold — idle cash: ",
+      invest_idle_in
+    ),
     x = "Date",
     y = "Capital ($)"
   ) +
   theme_minimal()
 
 mountain_plot
+
+# compute annualized volatility
+compute_annualized_volatility <- function(daily_series) {
+  daily_returns <- daily_series |>
+    arrange(date) |>
+    mutate(equity_return = (equity / lag(equity)) - 1) |>
+    filter(!is.na(equity_return))
+
+  daily_volatility <- sd(daily_returns$equity_return)
+  annualized_volatility <- daily_volatility * sqrt(252)
+
+  tibble(
+    annualized_volatility = annualized_volatility
+  )
+}
+volatility_results <- compute_annualized_volatility(sim_out$daily_series)
+print(volatility_results)
+# compute sharpe ratio
+compute_sharpe_ratio <- function(cagr, annualized_volatility, risk_free_rate) {
+  sharpe_ratio <- (cagr - risk_free_rate) / annualized_volatility
+  tibble(
+    sharpe_ratio = sharpe_ratio
+  )
+}
+sharpe_results <- compute_sharpe_ratio(
+  cagr_results$strategy_cagr,
+  volatility_results$annualized_volatility,
+  risk_free_rate
+)
+print(sharpe_results)

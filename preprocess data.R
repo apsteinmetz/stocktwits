@@ -40,6 +40,9 @@ sentiments <- sentiments |>
   # save cleaned data
   compute_parquet("data/sentiments_cleaned.parquet")
 
+sentiments <- duckplyr::read_parquet_duckdb(
+  "data/sentiments_cleaned.parquet"
+)
 summarise(sentiments, n = n())
 
 # SAVE TICKER POST COUNTS ==============================
@@ -57,7 +60,8 @@ cat("Limiting data to active users and popular tickers...\n")
 
 MIN_POSTS <- 100
 MIN_DAYS <- 180 # were they active over at least 6 months
-NUM_TICKERS <- 500
+# we hope to get about 500 tickers with valid price data
+NUM_TICKERS <- 700
 
 # determine the most popular tickers
 popular_tickers <- sentiments |>

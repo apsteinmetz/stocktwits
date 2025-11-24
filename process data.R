@@ -31,10 +31,14 @@ download_prices <- FALSE
 if (download_prices) {
   source("get_prices.r")
 } else {
-  prices_df <- duckplyr::read_parquet_duckdb("data/price_history_top500.parquet")
+  prices_df <- duckplyr::read_parquet_duckdb(
+    "data/price_history_top500.parquet"
+  )
 }
 
 prices_df |> summarise(prices = n(), unique_tickers = n_distinct(ticker))
+
+prices_df |> filter(adj_close > 10000) |> summarise(ticker)
 
 cat("Calculating 5-day percentage price changes...\n")
 price_changes <- prices_df |>

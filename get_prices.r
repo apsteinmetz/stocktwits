@@ -76,4 +76,4 @@ prices_df <- prices_df |> filter(!ticker %in% bad_tickers$ticker)
 prices_df |> distinct(ticker)
 # save to parquet
 # there won't 500 tickers due to failed ticker searches
-duckplyr::compute_parquet(prices_df, "price_history_top500.parquet")
+duckplyr::compute_parquet(prices_df, "data/price_history_top500.parquet")

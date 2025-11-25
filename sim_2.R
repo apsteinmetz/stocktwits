@@ -18,6 +18,16 @@ hold_days <- 7
 risk_free_rate <- 0.02 # annual rate
 invest_idle_in <- "cash" # options: "cash", "SPY"
 
+# Long only strategy
+recommendations <- recommendations |>
+  filter(buy_or_sell == 1)
+
+# truncate for testing ==========================================================
+recommendations <- recommendations |> filter(date > as.Date("2020-01-01"))
+# randomize  ==========================================================
+# randomize order of tickers for testing
+# recommendations$ticker <- recommendations$ticker |> sample()
+
 # add entry price to recommendations
 trade_blotter <- recommendations |>
   left_join(
@@ -36,10 +46,12 @@ trade_blotter <- recommendations |>
   mutate(
     return_factor = (exit_price / entry_price)
   ) |>
-  filter(!is.na(return_factor)) |>
-  # long only
-  filter(buy_or_sell == 1)
+  filter(!is.na(return_factor))
 
+
+spy_prices <- prices_df |>
+  filter(ticker == "SPY") |>
+  select(date, spy_price = adj_close)
 
 # Create a complete date range
 date_range <- seq(
@@ -58,107 +70,107 @@ trade_exits <- trade_entries |>
   filter(!is.na(return_factor)) |>
   select(trade_id, exit_date, return_factor)
 
-# Initialize daily capital tracker
-capital_tracker <- tibble(
-  date = date_range,
-  starting_capital = NA_real_,
-  entries_today = 0,
-  exits_today = 0,
-  deployed_capital = 0,
-  idle_capital = 0,
-  idle_return = 0,
-  daily_pnl = 0,
-  ending_capital = NA_real_
-)
+build_account <- function() {
+  # Initialize daily capital tracker
+  capital_tracker <- tibble(
+    date = date_range,
+    starting_capital = NA_real_,
+    entries_today = 0,
+    exits_today = 0,
+    deployed_capital = 0,
+    idle_capital = 0,
+    idle_return = 0,
+    daily_pnl = 0,
+    ending_capital = NA_real_
+  )
+  # Set initial capital
+  capital_tracker$starting_capital[1] <- initial_capital
+  capital_tracker$ending_capital[1] <- initial_capital
 
-spy_prices <- prices_df |>
-  filter(ticker == "SPY") |>
-  select(date, spy_price = adj_close)
-
-# Set initial capital
-capital_tracker$starting_capital[1] <- initial_capital
-capital_tracker$ending_capital[1] <- initial_capital
-
-# Simulate day by day
-for (i in 1:nrow(capital_tracker)) {
-  current_date <- capital_tracker$date[i]
-  current_capital <- if (i == 1) {
-    initial_capital
-  } else {
-    capital_tracker$ending_capital[i - 1]
-  }
-  capital_tracker$starting_capital[i] <- current_capital
-
-  # Process entries today
-  entries <- trade_entries |> filter(date == current_date)
-  capital_tracker$entries_today[i] <- nrow(entries)
-
-  # Process exits today
-  exits <- trade_exits |> filter(exit_date == current_date)
-  capital_tracker$exits_today[i] <- nrow(exits)
-
-  # Calculate deployed capital (trades still open)
-  open_trades <- trade_entries |>
-    filter(date <= current_date, exit_date > current_date)
-
-  deployed <- 0
-  if (nrow(open_trades) > 0) {
-    for (k in 1:nrow(open_trades)) {
-      entry_capital <- capital_tracker |>
-        filter(date == open_trades$date[k]) |>
-        pull(starting_capital)
-      deployed <- deployed + entry_capital * trade_size
+  # Simulate day by day
+  for (i in 1:nrow(capital_tracker)) {
+    current_date <- capital_tracker$date[i]
+    current_capital <- if (i == 1) {
+      initial_capital
+    } else {
+      capital_tracker$ending_capital[i - 1]
     }
-  }
-  capital_tracker$deployed_capital[i] <- deployed
+    capital_tracker$starting_capital[i] <- current_capital
 
-  # Calculate idle capital
-  idle <- current_capital - deployed
-  capital_tracker$idle_capital[i] <- idle
+    # Process entries today
+    entries <- trade_entries |> filter(date == current_date)
+    capital_tracker$entries_today[i] <- nrow(entries)
 
-  # Calculate return on idle capital
-  idle_return <- 0
-  if (invest_idle_in == "cash") {
-    # Daily risk-free rate
-    idle_return <- idle * (risk_free_rate / 252)
-  } else if (invest_idle_in == "SPY" && !is.null(spy_prices)) {
-    # Get SPY return for the day
-    if (i > 1) {
-      prev_date <- capital_tracker$date[i - 1]
-      spy_today <- spy_prices |> filter(date == current_date) |> pull(spy_price)
-      spy_prev <- spy_prices |> filter(date == prev_date) |> pull(spy_price)
+    # Process exits today
+    exits <- trade_exits |> filter(exit_date == current_date)
+    capital_tracker$exits_today[i] <- nrow(exits)
 
-      if (length(spy_today) > 0 && length(spy_prev) > 0 && spy_prev > 0) {
-        spy_return <- (spy_today / spy_prev) - 1
-        idle_return <- idle * spy_return
+    # Calculate deployed capital (trades still open)
+    open_trades <- trade_entries |>
+      filter(date <= current_date, exit_date > current_date)
+
+    deployed <- 0
+    if (nrow(open_trades) > 0) {
+      for (k in 1:nrow(open_trades)) {
+        entry_capital <- capital_tracker |>
+          filter(date == open_trades$date[k]) |>
+          pull(starting_capital)
+        deployed <- deployed + entry_capital * trade_size
       }
     }
-  }
-  capital_tracker$idle_return[i] <- idle_return
+    capital_tracker$deployed_capital[i] <- deployed
 
-  # Calculate P&L from exits
-  pnl <- 0
-  if (nrow(exits) > 0) {
-    for (j in 1:nrow(exits)) {
-      trade_id <- exits$trade_id[j]
-      entry_row <- trade_entries |> filter(trade_id == !!trade_id)
-      entry_capital <- capital_tracker |>
-        filter(date == entry_row$date) |>
-        pull(starting_capital)
-      trade_amount <- entry_capital * trade_size
-      pnl <- pnl + trade_amount * (exits$return_factor[j] - 1)
+    # Calculate idle capital
+    idle <- current_capital - deployed
+    capital_tracker$idle_capital[i] <- idle
+
+    # Calculate return on idle capital
+    idle_return <- 0
+    if (invest_idle_in == "cash") {
+      # Daily risk-free rate
+      idle_return <- idle * (risk_free_rate / 252)
+    } else if (invest_idle_in == "SPY" && !is.null(spy_prices)) {
+      # Get SPY return for the day
+      if (i > 1) {
+        prev_date <- capital_tracker$date[i - 1]
+        spy_today <- spy_prices |>
+          filter(date == current_date) |>
+          pull(spy_price)
+        spy_prev <- spy_prices |> filter(date == prev_date) |> pull(spy_price)
+
+        if (length(spy_today) > 0 && length(spy_prev) > 0 && spy_prev > 0) {
+          spy_return <- (spy_today / spy_prev) - 1
+          idle_return <- idle * spy_return
+        }
+      }
     }
+    capital_tracker$idle_return[i] <- idle_return
+
+    # Calculate P&L from exits
+    pnl <- 0
+    if (nrow(exits) > 0) {
+      for (j in 1:nrow(exits)) {
+        trade_id <- exits$trade_id[j]
+        entry_row <- trade_entries |> filter(trade_id == !!trade_id)
+        entry_capital <- capital_tracker |>
+          filter(date == entry_row$date) |>
+          pull(starting_capital)
+        trade_amount <- entry_capital * trade_size
+        pnl <- pnl + trade_amount * (exits$return_factor[j] - 1)
+      }
+    }
+
+    capital_tracker$daily_pnl[i] <- pnl
+    capital_tracker$ending_capital[i] <- current_capital + pnl + idle_return
   }
-
-  capital_tracker$daily_pnl[i] <- pnl
-  capital_tracker$ending_capital[i] <- current_capital + pnl + idle_return
+  capital_tracker <- capital_tracker |>
+    mutate(
+      daily_return = (ending_capital - starting_capital) / starting_capital
+    )
+  return(capital_tracker)
 }
-
-capital_tracker
-
+capital_tracker <- build_account()
 # compute CAPM metrics based on ending capital
-capital_tracker <- capital_tracker |>
-  mutate(daily_return = (ending_capital - starting_capital) / starting_capital)
 mean_return <- mean(capital_tracker$daily_return, na.rm = TRUE)
 sd_return <- sd(capital_tracker$daily_return, na.rm = TRUE)
 sharpe_ratio <- (mean_return - (risk_free_rate / 252)) / sd_return * sqrt(252)
@@ -204,7 +216,6 @@ merged_returns |>
   ggplot(aes(x = date, y = ending_capital)) +
   geom_line(color = "blue", linewidth = 1) +
   geom_line(aes(y = spy_capital)) +
-
   labs(
     title = "Equity Curve",
     x = "Date",

@@ -278,7 +278,7 @@ result_history |>
   theme_minimal()
 
 
-trade_summary <- all_windows_df |>
+trade_summary <- all_windows_df_limited |>
   summarise(
     .by = c(bullish, alpha_direction),
     trades = n(),

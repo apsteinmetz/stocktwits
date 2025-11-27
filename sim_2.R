@@ -13,18 +13,23 @@ methods_restore()
 # simulate strategy: start $10k, $1k per trade, 7-day holds
 initial_capital <- 10000
 capital <- initial_capital
-trade_fraction <- .01 # percent of capital per trade
+# trade_fraction <- .01 # percent of capital per trade
 hold_days <- 7
 risk_free_rate <- 0.02 # annual rate
 invest_idle_in <- "cash" # options: "cash", "SPY"
 daily_trade_limit <- 100
 
 # Long only strategy
+#recommendations <- recommendations |>
+#  filter(buy_or_sell == 1)
+
+# bad bulls only
 recommendations <- recommendations |>
-  filter(buy_or_sell == 1)
+  filter(bullish) |>
+  filter(alpha_direction == -1)
 
 # truncate for testing ==========================================================
-recommendations <- recommendations |> filter(date > as.Date("2020-01-01"))
+# recommendations <- recommendations |> filter(date > as.Date("2020-01-01"))
 # randomize  ==========================================================
 # randomize order of tickers for testing
 # recommendations$ticker <- recommendations$ticker |> sample()
@@ -47,7 +52,16 @@ trade_blotter <- recommendations |>
   mutate(
     return_factor = (exit_price / entry_price)
   ) |>
-  filter(!is.na(return_factor))
+  # filter(!is.na(return_factor)) |>
+  select(
+    ticker,
+    date,
+    buy_or_sell,
+    entry_price,
+    exit_date,
+    exit_price,
+    return_factor
+  )
 
 
 spy_prices <- prices_df |>
@@ -170,6 +184,11 @@ build_account <- function(end_index = length(date_range)) {
       capital_tracker$trade_pnl[i] +
       idle_ret
   }
+  # add daily return column
+  capital_tracker <- capital_tracker |>
+    mutate(
+      daily_return = (ending_capital / lag(ending_capital)) - 1
+    )
   return(capital_tracker)
 }
 

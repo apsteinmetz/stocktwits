@@ -163,7 +163,7 @@ get_significanct_posters <- function(win_rate) {
 }
 
 # make trade history for the selected date window
-CREATE_WINDOWED_RECORDS <- TRUE
+CREATE_WINDOWED_RECORDS <- FALSE
 if (CREATE_WINDOWED_RECORDS) {
   all_windows <- list()
   for (window_index in 1:nrow(date_windows)) {
@@ -336,5 +336,5 @@ all_windows_df_limited |>
 
 
 all_recs_limited <- all_windows_df_limited |>
-  select(ticker, date, buy_or_sell) |>
+  select(ticker, date, bullish, alpha_direction, buy_or_sell) |>
   compute_parquet("data/all_recs_limited.parquet")

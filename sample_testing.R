@@ -207,7 +207,8 @@ if (CREATE_WINDOWED_RECORDS) {
   all_windows_df <- all_windows |>
     bind_rows(.id = "window") |>
     filter(!is.na(gain_or_loss)) |>
-    mutate(window = as.integer(window)) |>
+    mutate(window = as.integer(window))
+  all_windows_df |>
     compute_parquet("data/skill_90_07.parquet")
 } else {
   cat("Loading precomputed windowed records...\n")

@@ -69,9 +69,9 @@ prices_df <- bind_rows(all_prices, .id = "ticker") |>
 # filter out tickers with nonsense prices > $10,000
 # some have prices over $1mm
 # this pulls about 43 tickers
-bad_tickers <- prices_df |> filter(adj_close > 10000) |> distinct(ticker)
+# bad_tickers <- prices_df |> filter(adj_close > 10000) |> distinct(ticker)
 # remove bad tickers
-prices_df <- prices_df |> filter(!ticker %in% bad_tickers$ticker)
+# prices_df <- prices_df |> filter(!ticker %in% bad_tickers$ticker)
 # keep data for top 500 tickers by post count
 prices_df |> distinct(ticker)
 # save to parquet

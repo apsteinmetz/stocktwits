@@ -19,14 +19,9 @@ risk_free_rate <- 0.02 # annual rate
 invest_idle_in <- "cash" # options: "cash", "SPY"
 daily_trade_limit <- 100
 
-# Long only strategy
-#recommendations <- recommendations |>
+## Long only strategy
+# recommendations <- recommendations |>
 #  filter(buy_or_sell == 1)
-
-# bad bulls only
-recommendations <- recommendations |>
-  filter(bullish) |>
-  filter(alpha_direction == -1)
 
 # truncate for testing ==========================================================
 # recommendations <- recommendations |> filter(date > as.Date("2020-01-01"))
@@ -52,7 +47,7 @@ trade_blotter <- recommendations |>
   mutate(
     return_factor = (exit_price / entry_price)
   ) |>
-  # filter(!is.na(return_factor)) |>
+  filter(!is.na(return_factor)) |>
   select(
     ticker,
     date,
@@ -82,11 +77,10 @@ trades <- trade_blotter |>
   filter(!is.na(return_factor)) |>
   select(ticker, date, buy_or_sell, entry_price, exit_date, return_factor) |>
   mutate(trade_id = row_number()) |>
+  # we won't know trade size until we know the capital available on that day
   mutate(trade_size = NA_real_) |>
   slice_head(by = date, n = daily_trade_limit)
 
-# trade_exits <- trade_entries |>
-#  select(trade_id, exit_date, return_factor)
 
 # Function to build account over time =========================================
 build_account <- function(end_index = length(date_range)) {

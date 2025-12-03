@@ -20,8 +20,8 @@ invest_idle_in <- "cash" # options: "cash", "SPY"
 daily_trade_limit <- 100
 
 ## Long only strategy
-# recommendations <- recommendations |>
-#  filter(buy_or_sell == 1)
+recommendations <- recommendations |>
+  filter(buy_or_sell == 1)
 
 # truncate for testing ==========================================================
 # recommendations <- recommendations |> filter(date > as.Date("2020-01-01"))
@@ -240,3 +240,46 @@ merged_returns |>
     y = "Ending Capital ($)"
   ) +
   theme_minimal()
+
+# plot rolling annual return vs SPY computed monthly
+rolling_returns <- merged_returns |>
+  arrange(date) |>
+  mutate(
+    month = lubridate::floor_date(date, "month")
+  ) |>
+  slice_tail(by = month, n = 1) |>
+  select(date, ending_capital, spy_capital) |>
+  # compute monthly returns
+  mutate(
+    monthly_return = (ending_capital / lag(ending_capital)) - 1,
+    spy_monthly_return = (spy_capital / lag(spy_capital)) - 1
+  ) |>
+  # annulize monthly returns
+  mutate(
+    strategy_annual_return = (1 + monthly_return)^12 - 1,
+    spy_annual_return = (1 + spy_monthly_return)^12 - 1
+  ) |>
+  select(date, strategy_annual_return, spy_annual_return) |>
+  pivot_longer(
+    cols = c("strategy_annual_return", "spy_annual_return"),
+    names_to = "type",
+    values_to = "annual_return"
+  ) |>
+  filter(!is.na(annual_return))
+
+# plot rolling annual return
+rolling_returns |>
+  ggplot(aes(x = date, y = annual_return, color = type)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Rolling Annual Return: Strategy vs SPY",
+    x = "Month",
+    y = "Annual Return"
+  ) +
+  scale_color_manual(
+    name = "Type",
+    values = c("strategy_annual_return" = "blue", "spy_annual_return" = "red"),
+    labels = c("Strategy", "SPY")
+  ) +
+  theme_minimal()
+# end of file

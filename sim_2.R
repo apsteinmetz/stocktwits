@@ -16,8 +16,9 @@ capital <- initial_capital
 # trade_fraction <- .01 # percent of capital per trade
 hold_days <- 7
 risk_free_rate <- 0.02 # annual rate
-invest_idle_in <- "cash" # options: "cash", "SPY"
-daily_trade_limit <- 100
+invest_idle_in <- "SPY" # options: "cash", "SPY"
+daily_trade_limit <- 100 # max number of new trades per day
+position_cap <- .25 # max fraction of capital to allocate per position.  max is 1.0. remainder goes to idle cash.
 
 ## Long only strategy
 recommendations <- recommendations |>
@@ -62,7 +63,10 @@ trade_blotter <- recommendations |>
 spy_prices <- prices_df |>
   filter(ticker == "SPY") |>
   select(date, spy_price = adj_close) |>
-  mutate(spy_ret = (spy_price / lag(spy_price)) - 1)
+  mutate(spy_ret = (spy_price / lag(spy_price)) - 1) |>
+  # replace NA with 0 for first day
+  mutate(spy_ret = if_else(is.na(spy_ret), 0, spy_ret))
+
 
 # Create a complete date range
 date_range <- seq(
@@ -136,7 +140,8 @@ build_account <- function(end_index = length(date_range)) {
     capital_tracker$entries_today[i] <- nrow(todays_entries)
 
     new_trade_size <- capital_tracker$available_for_entries[i] /
-      nrow(todays_entries)
+      # limit allocation to not more than 1/position_cap per trade
+      max((1 / position_cap), nrow(todays_entries))
     # set trade size for today's date in trades
     trades <- trades |>
       mutate(
@@ -169,7 +174,13 @@ build_account <- function(end_index = length(date_range)) {
     if (invest_idle_in == "cash") {
       idle_ret <- idle_cap * (risk_free_rate / 252)
     } else if (invest_idle_in == "SPY") {
-      idle_ret <- idle_cap * spy_prices$spy_ret[i]
+      spy_ret_today <- spy_prices |>
+        filter(date == current_date) |>
+        pull(spy_ret)
+      if (length(spy_ret_today) == 0) {
+        spy_ret_today <- 0
+      }
+      idle_ret <- idle_cap * spy_ret_today
     }
 
     # End of day capital: starting + realized P&L + idle return
@@ -181,7 +192,7 @@ build_account <- function(end_index = length(date_range)) {
   # add daily return column
   capital_tracker <- capital_tracker |>
     mutate(
-      daily_return = (ending_capital / lag(ending_capital)) - 1
+      daily_return = ending_capital / starting_capital - 1
     )
   return(capital_tracker)
 }
@@ -230,7 +241,7 @@ cat("Alpha (daily): ", round(alpha * 100, 4), "%\n", sep = "")
 cat("Alpha (annualized): ", round(alpha * 252 * 100, 2), "%\n", sep = "")
 
 # Plot equity curve
-merged_returns |>
+mtn <- merged_returns |>
   ggplot(aes(x = date, y = ending_capital)) +
   geom_line(color = "blue", linewidth = 1) +
   geom_line(aes(y = spy_capital)) +
@@ -240,6 +251,7 @@ merged_returns |>
     y = "Ending Capital ($)"
   ) +
   theme_minimal()
+print(mtn)
 
 # convert merged_returns to month-end and compute rolling 12‑month return
 if (exists("merged_returns") && nrow(merged_returns) > 0) {

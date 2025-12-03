@@ -241,45 +241,71 @@ merged_returns |>
   ) +
   theme_minimal()
 
-# plot rolling annual return vs SPY computed monthly
-rolling_returns <- merged_returns |>
-  arrange(date) |>
-  mutate(
-    month = lubridate::floor_date(date, "month")
-  ) |>
-  slice_tail(by = month, n = 1) |>
-  select(date, ending_capital, spy_capital) |>
-  # compute monthly returns
-  mutate(
-    monthly_return = (ending_capital / lag(ending_capital)) - 1,
-    spy_monthly_return = (spy_capital / lag(spy_capital)) - 1
-  ) |>
-  # annulize monthly returns
-  mutate(
-    strategy_annual_return = (1 + monthly_return)^12 - 1,
-    spy_annual_return = (1 + spy_monthly_return)^12 - 1
-  ) |>
-  select(date, strategy_annual_return, spy_annual_return) |>
-  pivot_longer(
-    cols = c("strategy_annual_return", "spy_annual_return"),
-    names_to = "type",
-    values_to = "annual_return"
-  ) |>
-  filter(!is.na(annual_return))
+# convert merged_returns to month-end and compute rolling 12‑month return
+if (exists("merged_returns") && nrow(merged_returns) > 0) {
+  monthly_merged <- merged_returns |>
+    arrange(date) |>
+    mutate(month = lubridate::floor_date(date, "month")) |>
+    group_by(month) |>
+    slice_max(date, n = 1) |>
+    ungroup() |>
+    select(month, ending_capital, spy_capital) |>
+    mutate(
+      strategy_mret = (ending_capital / lag(ending_capital)) - 1,
+      spy_mret = (spy_capital / lag(spy_capital)) - 1
+    )
 
-# plot rolling annual return
-rolling_returns |>
-  ggplot(aes(x = date, y = annual_return, color = type)) +
-  geom_line(linewidth = 1) +
-  labs(
-    title = "Rolling Annual Return: Strategy vs SPY",
-    x = "Month",
-    y = "Annual Return"
-  ) +
-  scale_color_manual(
-    name = "Type",
-    values = c("strategy_annual_return" = "blue", "spy_annual_return" = "red"),
-    labels = c("Strategy", "SPY")
-  ) +
-  theme_minimal()
-# end of file
+  # trailing 12-month return: cumulative product of last 12 monthly returns minus 1
+  monthly_merged <- monthly_merged |>
+    mutate(
+      rolling12_strategy = zoo::rollapply(
+        strategy_mret,
+        width = 12,
+        FUN = function(x) prod(1 + x) - 1,
+        align = "right",
+        fill = NA
+      ),
+      rolling12_spy = zoo::rollapply(
+        spy_mret,
+        width = 12,
+        FUN = function(x) prod(1 + x) - 1,
+        align = "right",
+        fill = NA
+      )
+    )
+
+  plot_df <- monthly_merged |>
+    select(month, rolling12_strategy, rolling12_spy) |>
+    pivot_longer(
+      cols = starts_with("rolling12"),
+      names_to = "type",
+      values_to = "rolling_12m_return"
+    ) |>
+    mutate(
+      type = recode(
+        type,
+        rolling12_strategy = "Strategy",
+        rolling12_spy = "SPY"
+      )
+    )
+
+  p_rolling12 <- plot_df |>
+    ggplot(aes(x = month, y = rolling_12m_return, color = type)) +
+    geom_line(linewidth = 1) +
+    labs(
+      title = "Trailing 12‑Month Return (monthly, rolling)",
+      x = "Month",
+      y = "Trailing 12‑Month Return",
+      color = NULL
+    ) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    theme_minimal()
+
+  # return useful object
+  list(monthly = monthly_merged, plot = p_rolling12)
+} else {
+  warning(
+    "merged_returns not available or empty — cannot compute monthly rolling returns."
+  )
+  invisible(NULL)
+}

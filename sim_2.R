@@ -10,15 +10,14 @@ prices_df <- read_parquet_duckdb("data/price_history_top500.parquet") |>
   select(ticker, date, adj_close)
 
 methods_restore()
-# simulate strategy: start $10k, $1k per trade, 7-day holds
+# simulate strategy: start $10k, 7-day holds
 initial_capital <- 10000
 capital <- initial_capital
-# trade_fraction <- .01 # percent of capital per trade
 hold_days <- 7
 risk_free_rate <- 0.02 # annual rate
 invest_idle_in <- "SPY" # options: "cash", "SPY"
 daily_trade_limit <- 100 # max number of new trades per day
-position_cap <- .25 # max fraction of capital to allocate per position.  max is 1.0. remainder goes to idle cash.
+position_cap <- .1 # max fraction of capital to allocate per position.  max is 1.0. remainder goes to idle cash.
 
 ## Long only strategy
 recommendations <- recommendations |>

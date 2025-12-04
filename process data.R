@@ -137,6 +137,9 @@ price_volatility <- prices_df |>
   ) |>
   arrange(desc(volatility))
 
+# mag 7
+price_volatility |> 
+  filter(ticker %in% c("AAPL","AMZN","TSLA","META","NVDA","NFLX","GOOG"))
 # plot histogram of volatilities with SPY labeled with a vertical line
 gg <- price_volatility |>
   ggplot(aes(x = volatility)) +
@@ -145,6 +148,14 @@ gg <- price_volatility |>
     data = price_volatility |> filter(ticker == "SPY"),
     aes(xintercept = volatility),
     color = "red",
+    linetype = "dashed",
+    size = 1
+  ) +
+  # add vline for TSLA volatility
+  geom_vline(
+    data = price_volatility |> filter(ticker == "TSLA"),
+    aes(xintercept = volatility),
+    color = "blue",
     linetype = "dashed",
     size = 1
   ) +
@@ -158,19 +169,33 @@ gg <- price_volatility |>
   # label the SPY line
   annotate(
     "text",
-    x = price_volatility |> filter(ticker == "SPY") |> pull(volatility) * 1.1,
-    y = 3,
+    x = price_volatility |> filter(ticker == "SPY") |> pull(volatility) * 1.2,
+    y = 9,
     label = glue::glue(
       "SPY ",
       price_volatility |>
         filter(ticker == "SPY") |>
         pull(volatility) |>
-        scales::percent(accuracy = 0.1)
+        scales::percent(accuracy = 1)
     ),
-    # label = "SPY",
     color = "red",
+    angle = 90
+  ) +
+  # label the TSLA line
+  annotate(
+    "text",
+    x = price_volatility |> filter(ticker == "TSLA") |> pull(volatility) * 1.2,
+    y = 9,
+    label = glue::glue(
+      "TSLA ",
+      price_volatility |>
+        filter(ticker == "TSLA") |>
+        pull(volatility) |>
+        scales::percent(accuracy = 1)
+    ),
+    color = "blue",
     angle = 90,
-    hjust = -0.5
+    hjust = 0
   ) +
   theme_minimal()
 print(gg)

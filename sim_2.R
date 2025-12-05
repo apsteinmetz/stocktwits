@@ -15,7 +15,7 @@ initial_capital <- 10000
 capital <- initial_capital
 hold_days <- 7
 risk_free_rate <- 0.02 # annual rate
-invest_idle_in <- "SPY" # options: "cash", "SPY"
+invest_idle_in <- "cash" # options: "cash", "SPY"
 daily_trade_limit <- 100 # max number of new trades per day
 position_cap <- .1 # max fraction of capital to allocate per position.  max is 1.0. remainder goes to idle cash.
 

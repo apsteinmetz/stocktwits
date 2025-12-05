@@ -126,6 +126,7 @@ print(bull_win_rate)
 
 # compute volatility (std dev) of returns for all tickers
 price_volatility <- prices_df |>
+  as_tibble() |> 
   arrange(ticker, date) |>
   mutate(
     .by = ticker,

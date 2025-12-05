@@ -175,3 +175,45 @@ summary_table |>
     decimals = 0
   ) |>
   print()
+
+row1 <- track_record |> 
+  mutate(sentiment = if_else(bullish, "bullish", "bearish")) |> 
+  summarise(.by = sentiment, n= n())
+  
+row2 <- significant_posters |> summarise(.by = sentiment, n= n())
+row3_4<-significant_posters |> 
+  summarise(.by = c(alpha_direction,sentiment), n= n())
+
+#bind rows in a table
+detailed_table <- tibble(
+  Metric = c(
+    "Total posters tested",
+    "posters significantly different from chance",
+    "posters significantly better than .500",
+    "posters significantly worse than .500"
+  ),
+  Bearish = c(
+    pull(filter(row1, sentiment == "bearish"), n),
+    pull(filter(row2, sentiment == "bearish"), n),
+    pull(filter(row3_4_, alpha_direction == 1, sentiment == "bearish"), n),
+    pull(filter(row3_4_, alpha_direction == -1, sentiment == "bearish"), n)
+  ),
+  Bullish = c(
+    pull(filter(row1, sentiment == "bullish"), n),
+    pull(filter(row2, sentiment == "bullish"), n),
+    pull(filter(row3_4_, alpha_direction == 1, sentiment == "bullish"), n),
+    pull(filter(row3_4_, alpha_direction == -1, sentiment == "bullish"), n)
+  )
+ 
+) |>
+     mutate(Total = Bearish + Bullish)
+
+detailed_table |>
+  gt() |>
+  tab_header(
+    title = "Summary of User Win Rate Statistical Tests"
+  ) |>
+  fmt_number(
+    columns = c(Bearish, Bullish, Total),
+    decimals = 0
+  ) 

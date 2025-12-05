@@ -1,9 +1,14 @@
 ---
 title: "Making Money by Being Wrong"
 format: html
+execute:
+  warning: false
+  message: false
+  code-fold: true
 bibliography: refs.bibtex
 link-citations: true
 ---
+
 ## Introduction
 
 Picking stocks that will go up is hard. Picking stocks that will go down is also hard. Furthermore, listening to what randos on social media say about which stocks will go up or down doesn't seem like a good strategy. Now suppose we do the opposite of what the randos say. Can we make money that way? In, preview, "Yes."
@@ -28,7 +33,7 @@ Using Yahoo Finance we will download the price histories of the most popular sto
 
 Finally, we'll see if a trading strategy can be constructed. using out-of-sample data.
 
-## Get The Data
+## Get The Stocktwits Data
 
 The dataset is stored in a number of different formats, each with varying amounts of information. We are only interested in the files which contain a user ID, ticker symbol and sentiment (bullish or bearish) which is the "symbol_sentiments" dataset, stored as 34 CSV files. The files are public so we don't need any login credentials. The heavy lifting of this project is done by DuckDB and the Duckplyr package in R. DuckDB is an SQL-language database management system which can handle very large datasets efficiently without necessarily loading them in memory all at once. Duckplyr is a package which allows us to use the dplyr syntax we know and love while DuckDB is the back end. In theory, you don't even need to download the files locally but I found that downloading them first and then pointing DuckDB to the local files is much faster in practice. The files will take up about one GB of disk space.
 
@@ -81,7 +86,7 @@ If all goes well we'll have 34 parquet-format files in a 'data' subfolder . Now 
 ::: callout-tip
 I prefer to use the Dplyr vernacular when working in R. When using any large data frame, I recommend using a Duckplyr/DuckDB/Parquet-files workflow. Duckplyr is a package which translates Dplyr verbs into SQL queries executed by DuckDB. This allows you to work with datasets larger than memory without having to learn SQL. If you are familiar with Dplyr, Duckplyr will feel very natural. Parquet is a column-oriented file stroage format suited for large datasets.
 
-There is a notion that if you can fit a dataset into memory, a database like DuckDB is not a time saver.  I disagree.  Further, Duckplyr is the best database frontend package for R.   You see my discussion on the relative performance of database packages [here](https://outsiderdata.netlify.app/posts/2024-04-10-the-truth-about-tidy-wrappers/benchmark_wrappers).
+There is a notion that if you can fit a dataset into memory, a database like DuckDB is not a time saver. I disagree. Further, Duckplyr is the best database frontend package for R. You see my discussion on the relative performance of database packages [here](https://outsiderdata.netlify.app/posts/2024-04-10-the-truth-about-tidy-wrappers/benchmark_wrappers).
 
 When using Duckplyr, operations are "lazy". Nothing is actually computed until necessary. This allows you to chain together multiple operations without having to create intermediate datasets. Do use Duckplyr's verbs where possible to take advantage of this feature. For instance, if you want to query the size of the dataset, use `summarise()` rather than `nrow()`. The former will compute a single-row data frame, while the latter will pull the entire dataset into memory.
 :::
@@ -230,8 +235,10 @@ popular_tickers |>
     y = "Number of Mentions (log scale)"
   )
 ```
+
 ## Download Price Data
-Now let's download price data for the popular tickers for the date windows  where they are mentioned in the StockTwits posts.  We can get historical price data from Yahoo Finance.  While we will search for the 500 top tickers, some tickers may not be found on Yahoo Finance. We'll skip those tickers. 
+
+Now let's download price data for the popular tickers for the date windows where they are mentioned in the StockTwits posts. We can get historical price data from Yahoo Finance. While we will search for the 500 top tickers, some tickers may not be found on Yahoo Finance. We'll skip those tickers.
 
 ```{r }
 #| eval: false
@@ -269,8 +276,349 @@ for (i in start_row:nrow(popular_tickers)) {
 prices_df <- bind_rows(all_prices, .id = "ticker") |> 
   duckplyr::compute_parquet(prices_df, "price_history_top500.parquet")
 ```
+
 ::: callout-note
 Tidyverse experts will question why I used a `for()` loop instead of the `purrr::map()` function. When getting data from an external source, I don't want to lose progress if one of the calls fails in a way I didn't anticipate. Using a for loop lets me fix the error and resume from the last successful call by manually setting the start index rather than having to start over.
 :::
 
-Now we map the prices to the posts.  We'll take the adjusted close on the date of the post as our starting price.  We'll take the adjusted close price one week later as our ending price.  If the direction of the price change matches the sentiment of the post, we count it as a correct prediction.  There are two obvious caveats with this approach.  We don't know what time horizon the poster had in mind when making the post. It could have been a week, a month or 5 minutes.  Second, we assume we transact at the closing prices on the day of the post and one week later, which may not be feasible.
+We can make a couple interesting observations about the prices. Most of the most popular tickers are meme stocks and many of the adjusted close prices are absurdly high, millions of dollars per share. This is not an error. Most meme stocks have been relentless destroyers of value. To boost the nominal dollar share price, companies will do a reverse split, sometimes many reverse splits. The adjusted close price keeps continuity where there would otherwise be a gap jump in the share price. This has the effect of making it appear that historical share prices are higher than they were at the time are but allows accurate return calculations over long time periods.
+
+Second, the volatility of these meme stocks is crazy. Wherever this exercise takes us, we know were are in for a wild ride. TSLA, the most volatile of the mega cap stocks AND a popular meme stock, is one of the less volatile stocks in our sample.
+
+
+```{r show vol histogram}
+#| code-fold: true
+# compute volatility (std dev) of returns for all tickers
+prices_df <- read_parquet_duckdb("data/price_history_top500.parquet") |> 
+  as_tibble()
+price_volatility <- prices_df |>
+  arrange(ticker, date) |>
+  mutate(
+    .by = ticker,
+    daily_return = (adj_close / lag(adj_close)) - 1
+  ) |>
+  summarise(
+    .by = ticker,
+    volatility = sd(daily_return, na.rm = TRUE) * sqrt(252) # annualized volatility
+  ) |>
+  arrange(desc(volatility))
+
+# mag 7
+price_volatility |> 
+  filter(ticker %in% c("AAPL","AMZN","TSLA","META","NVDA","NFLX","GOOG")) |> 
+  gt::gt() |>
+  gt::tab_header(
+    title = 'Annualized Volatility of The "Mag 7"'
+  ) |>
+  gt::fmt_percent(
+    columns = c(volatility),
+    decimals = 0
+  )
+ 
+# plot histogram of volatilities with SPY labeled with a vertical line
+gg <- price_volatility |>
+  ggplot(aes(x = volatility)) +
+  geom_histogram(binwidth = 0.01, fill = "lightblue", color = "black") +
+  geom_vline(
+    data = price_volatility |> filter(ticker == "SPY"),
+    aes(xintercept = volatility),
+    color = "red",
+    linetype = "dashed",
+    size = 1
+  ) +
+  # add vline for TSLA volatility
+  geom_vline(
+    data = price_volatility |> filter(ticker == "TSLA"),
+    aes(xintercept = volatility),
+    color = "blue",
+    linetype = "dashed",
+    size = 1
+  ) +
+  # log x scale with percentage labels
+  scale_x_log10(labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title = "Distribution of Annualized Volatility of Popular Stocktwits Tickers",
+    x = "Annualized Volatility (log scale)",
+    y = "Count of Tickers"
+  ) +
+  # label the SPY line
+  annotate(
+    "text",
+    x = price_volatility |> filter(ticker == "SPY") |> pull(volatility) * 1.2,
+    y = 9,
+    label = glue::glue(
+      "SPY ",
+      price_volatility |>
+        filter(ticker == "SPY") |>
+        pull(volatility) |>
+        scales::percent(accuracy = 1)
+    ),
+    color = "red",
+    angle = 90
+  ) +
+  # label the TSLA line
+  annotate(
+    "text",
+    x = price_volatility |> filter(ticker == "TSLA") |> pull(volatility) * 1.2,
+    y = 9,
+    label = glue::glue(
+      "TSLA ",
+      price_volatility |>
+        filter(ticker == "TSLA") |>
+        pull(volatility) |>
+        scales::percent(accuracy = 1)
+    ),
+    color = "blue",
+    angle = 90,
+    hjust = 0
+  ) +
+  theme_minimal()
+print(gg)
+```
+
+Now that we have the prices, we'll build a table of price changes. Take the adjusted close on the date of the post as our starting price. We'll take the adjusted close price one week later as our ending price. Compute the absolute price change and the change relative to SPY so we can test either. 
+```{r make price change table}
+#| eval: true
+#| code-fold: true
+price_changes <- prices_df |>
+  arrange(ticker, date) |>
+  mutate(
+    .by = ticker,
+    adj_close_lead_w = lead(adj_close, 5),
+    adj_change_1w = (adj_close_lead_w - adj_close) / adj_close
+  ) |>
+  select(ticker, date, adj_change_1w) |>
+  # add another column for pct change minus the SPY change
+  left_join(
+    prices_df |>
+      filter(ticker == "SPY") |>
+      arrange(date) |>
+      mutate(
+        .by = ticker,
+        adj_close_lead_w = lead(adj_close, 5),
+        spy_adj_change_1w = (adj_close_lead_w - adj_close) / adj_close
+      ) |>
+      select(date, spy_adj_change_1w),
+    by = "date"
+  ) |>
+  mutate(pct_change_minus_spy = adj_change_1w - spy_adj_change_1w) |>
+  select(ticker, date, adj_change_1w, pct_change_minus_spy) #
+
+# ticker is SPY then make pct_change_minus_spy equal to adj_change_1w
+price_changes <- price_changes |>
+  filter(ticker == "SPY") |>
+  mutate(pct_change_minus_spy = adj_change_1w) |>
+  union_all((price_changes)) |>
+  # remove rows where ticker is SPY and pct_change_minus_spy is 0
+  filter(!(ticker == "SPY" & pct_change_minus_spy != adj_change_1w))
+```
+
+Now match the price changes to the sentiment posts to create a track record. If the direction of the price change matches the sentiment of the post, we count it as a correct prediction. There are two obvious caveats with this approach. We don't know what time horizon the poster had in mind when making the post. It could have been a week, a month or 5 minutes. Second, we assume we transact at the closing prices on the day of the post and one week later, which may not be feasible.
+```{r calculate track record}
+#| code-fold: true
+# TRACK RECORD CALCULATION ==============================
+# join popular_sentiments with price_changes
+track_record <- sentiments |>
+  left_join(price_changes, by = c("ticker", "date")) |>
+  #  na.omit() |>
+  # add true/false column for whether adj_change_1w  has the same sign as sentiment
+  mutate(
+    win_absolute = bullish == (adj_change_1w > 0),
+    win_vs_SPY = bullish == (pct_change_minus_spy > 0)
+  ) |>
+  #  select(user_id, ticker, date, bullish, win_absolute)
+  select(user_id, ticker, date, bullish, win_absolute, win_vs_SPY) |>
+  filter(!is.na(win_absolute) & !is.na(win_vs_SPY)) 
+  # make sure we have at least 50 posts per user with matched prices
+  
+track_record_bull <- track_record |>
+  filter(bullish)
+track_record_bear <- track_record |>
+  filter(!bullish)
+
+track_record |> slice_head(n = 10) |> 
+  collect() |> 
+  gt::gt() |> 
+  # add title
+  gt::tab_header(
+    title = "Sample Track Record Entries"
+  )
+```
+
+Once we have the track records we can compute the batting average for each user.
+```{r compute win rates}
+#| code-fold: true
+# compute win rate by user_id
+get_win_rate <- function(track_record, abs_or_rel = c("relative", "absolute")) {
+  if (abs_or_rel == "relative") {
+    user_win_rate <- summarise(
+      track_record,
+      .by = user_id,
+      total = n(),
+      wins = sum(win_vs_SPY),
+      win_rate = sum(win_vs_SPY) / n()
+    )
+  } else {
+    {
+      user_win_rate <- summarise(
+        track_record,
+        .by = user_id,
+        total = n(),
+        wins = sum(win_absolute),
+        win_rate = sum(win_absolute) / n()
+      )
+    } |>
+      arrange(desc(win_rate)) |>
+      filter(!is.na(win_rate))
+  }
+  return(user_win_rate)
+}
+user_win_rate <- get_win_rate(track_record, "relative")
+bear_win_rate <- get_win_rate(track_record_bear, "relative")
+bull_win_rate <- get_win_rate(track_record_bull, "relative")
+methods_restore()
+bull_win_rate |> 
+  arrange(desc(win_rate)) |> 
+  filter(total >= 50) |>
+  slice_head(n=10) |> 
+  collect() |> 
+  gt::gt() |> 
+  # add title
+  gt::tab_header(
+    title = "Top 10 Batting Averages vs SPY"
+  ) |> 
+    # add footer
+  gt::tab_source_note(
+    source_note = "Minimum 50 posts with price matches") |> 
+  gt::fmt_percent(
+    columns = c(win_rate),
+    decimals = 1
+  )
+```
+
+We are interested in finding the users whose batting averages are statistically signficant so we'll use a binomial test and keep only those users who are signficant at the 95% level.
+```{r test significance}
+#| eval: false
+#| code-fold: true
+# Perform binomial tests for each user
+# H0: p = 0.5 (random chance)
+# H1: p ≠ 0.5 (not random chance)
+
+get_significanct_posters <- function(win_rate) {
+  results <- win_rate |>
+    as_tibble() |>
+    rowwise() |>
+    mutate(
+      # Perform two-sided binomial test
+      binom_test = list(binom.test(
+        wins,
+        total,
+        p = 0.5,
+        alternative = "two.sided"
+      )),
+      p_value = binom_test$p.value,
+      conf_low = binom_test$conf.int[1],
+      conf_high = binom_test$conf.int[2]
+    ) |>
+    ungroup() |>
+    select(-binom_test, -starts_with("conf")) |>
+    arrange(p_value)
+
+  # Filter for statistically significant results (p < 0.05)
+  significant_posters <- results |>
+    filter(p_value < 0.05) |>
+    mutate(
+      alpha_direction = as.integer(case_when(
+        win_rate > 0.5 ~ 1,
+        win_rate < 0.5 ~ -1,
+        TRUE ~ 0
+      ))
+    ) |>
+    select(-p_value)
+
+  return(significant_posters)
+}
+
+# separate bulls from bears and save result
+significant_posters <- get_significanct_posters(bear_win_rate) |>
+  mutate(sentiment = "bearish") |>
+  bind_rows(
+    get_significanct_posters(bull_win_rate) |>
+      mutate(sentiment = "bullish")
+  ) |>
+  compute_parquet("data/significant_posters.parquet")
+```
+Stocktwits is filled with retail traders who are generally long-only and trying to hype stocks. It is therefore not surprising that there are far more bullish posts than bearish posts. What is surprising is that there are far more posters with statistically significant negative skill than positive skill. In other words, there are many more bad pickers than good pickers on StockTwits. While there are mostly bullish posts, the bearish posters are more likely to show positive skill.
+
+```{r summary table}
+#| code-fold: true
+# make a table of the summary using gt with bearish/bullish counts
+significant_posters <- 
+  read_parquet_duckdb("data/significant_posters.parquet")
+ 
+row1 <- track_record |> 
+  mutate(sentiment = if_else(bullish, "bullish", "bearish")) |> 
+  summarise(.by = sentiment, n= n())
+  
+row2 <- significant_posters |> summarise(.by = sentiment, n= n())
+row3_4<-significant_posters |> 
+  summarise(.by = c(alpha_direction,sentiment), n= n())
+
+#bind rows in a table
+detailed_table <- tibble(
+  Metric = c(
+    "Total posters tested",
+    "posters significantly different from chance",
+    "posters significantly better than .500",
+    "posters significantly worse than .500"
+  ),
+  Bearish = c(
+    pull(filter(row1, sentiment == "bearish"), n),
+    pull(filter(row2, sentiment == "bearish"), n),
+    pull(filter(row3_4, alpha_direction == 1, sentiment == "bearish"), n),
+    pull(filter(row3_4, alpha_direction == -1, sentiment == "bearish"), n)
+  ),
+  Bullish = c(
+    pull(filter(row1, sentiment == "bullish"), n),
+    pull(filter(row2, sentiment == "bullish"), n),
+    pull(filter(row3_4, alpha_direction == 1, sentiment == "bullish"), n),
+    pull(filter(row3_4, alpha_direction == -1, sentiment == "bullish"), n)
+  )
+  ) |> mutate(Total = Bearish + Bullish)
+
+detailed_table |>
+  gt() |>
+  tab_header(
+    title = "Summary of User Win Rate Statistical Tests"
+  ) |>
+  fmt_number(
+    columns = c(Bearish, Bullish, Total),
+    decimals = 0
+  ) 
+```
+
+```{r plot significant posters}
+#| code-fold: true
+gg <- significant_posters |>
+  ggplot(aes(x = win_rate, fill = sentiment)) +
+  geom_histogram(binwidth = 0.01, position = "stack", color = "black") +
+  scale_fill_manual(
+    name = "Sentiment",
+    values = c("bearish" = "#D55E00", "bullish" = "#009E73")
+  ) +
+  labs(
+    title = "There are far more Bullish Posts and Far More Posters with Negative Skill",
+    subtitle = "Histogram of Batting Averages for Statistically Significant Posters",
+    x = "Batting Average",
+    y = "Count"
+  ) +
+  geom_vline(
+    xintercept = 0.5,
+    linetype = "dashed",
+    color = "red",
+    linewidth = 2
+  ) +
+  theme_minimal()
+print(gg)
+```
+

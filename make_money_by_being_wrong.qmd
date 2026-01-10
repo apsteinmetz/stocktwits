@@ -324,7 +324,7 @@ gg <- price_volatility |>
     aes(xintercept = volatility),
     color = "red",
     linetype = "dashed",
-    size = 1
+    linewidth = 1
   ) +
   # add vline for TSLA volatility
   geom_vline(
@@ -621,4 +621,128 @@ gg <- significant_posters |>
   theme_minimal()
 print(gg)
 ```
+```{r match-prices-function, eval=FALSE}
+# This computation is intensive, so we'll save the results
 
+# methods_restore()
+# prices <- as_tibble(prices)
+# sentiments <- as_tibble(sentiments)
+
+get_fut_price <- function(prices, days_ahead){
+price_chg <- prices |> 
+  transmute(ticker,date,price_t0 = adj_close, future_date = date + days(days_ahead)) |> 
+  left_join(prices |> 
+      select(ticker, date, price_fut = adj_close),
+    by = join_by("ticker", "future_date" == "date")
+  ) |> filter(!is.na(price_fut))
+  return(price_chg)
+}
+price_chg <- get_fut_price(prices_df, 7)
+price_chg <- anti_join(prices_df,price_chg) |> 
+  get_fut_price(8) |> 
+  bind_rows(price_chg)
+# 3 days should be enough to fill most gaps
+price_chg <- anti_join(prices_df,price_chg) |> 
+  get_fut_price(9) |> 
+  bind_rows(price_chg)
+# get indexed value change
+price_chg <- price_chg |> 
+  mutate(
+    wk_return = (price_fut - price_t0) / price_t0
+  ) |> 
+  select(ticker, date, wk_return)
+# add column for return relative to SPY return
+# Get SPY returns for the same dates
+spy_returns <- price_chg |>
+  filter(ticker == "SPY") |>
+  select(date, spy_wk_return = wk_return)
+# Add excess return column (stock return - SPY return)
+price_chg <- price_chg |>
+  left_join(spy_returns, by = "date") |>
+  mutate(
+    excess_return = wk_return - spy_wk_return
+  ) |>
+  select(ticker, date, wk_return, excess_return)
+
+
+# Join sentiments with prices on the post date
+sentiments_with_returns <- sentiments |>
+  left_join(price_chg,by = c("ticker", "date")) |> 
+  as_tibble()
+
+
+sentiment_results <- sentiments_with_returns |>
+  mutate(
+    # Correct if bullish and outperformed, or bearish and underperformed
+    correct = case_when(
+      bullish & excess_return > 0 ~ TRUE,
+      !bullish & excess_return < 0 ~ TRUE,
+      TRUE ~ FALSE
+    )
+  )
+
+# Save the matched data
+compute_parquet(sentiment_results, "data/sentiment_results.parquet")
+```
+
+```{r rolling-skill-assessment, eval=FALSE}
+# This is computationally intensive, so we'll save the results
+
+# Get unique weeks for evaluation
+eval_dates <- sentiment_results |>
+  distinct(date) |>
+  arrange(date) |>
+  mutate(week = floor_date(date, "week")) |>
+  distinct(week) |>
+  filter(week >= min(week) + months(3))  # Need 3 months of history
+
+# Function to assess user skill based on prior 3 months
+assess_rolling_skill <- function(eval_date, data, min_posts = 10, p_threshold = 0.05) {
+  # Get data from 3 months prior
+  start_date <- eval_date - months(3)
+  
+  historical_data <- data |>
+    filter(date >= start_date, date < eval_date)
+  
+  if(nrow(historical_data) == 0) return(NULL)
+  
+  # Calculate user statistics
+  user_stats <- historical_data |>
+    group_by(user_id) |>
+    summarise(
+      total_posts = n(),
+      correct = sum(correct),
+      accuracy = mean(correct),
+      .groups = "drop"
+    ) |>
+    filter(total_posts >= min_posts)
+  
+  # Statistical testing
+  user_stats |>
+    rowwise() |>
+    mutate(
+      p_value = binom.test(correct, total_posts, p = 0.5, 
+                           alternative = "two.sided")$p.value,
+      significant = p_value < p_threshold,
+      skill_direction = case_when(
+        significant & accuracy > 0.5 ~ "positive",
+        significant & accuracy < 0.5 ~ "negative",
+        TRUE ~ "none"
+      ),
+      eval_date = eval_date
+    ) |>
+    ungroup() |>
+    filter(skill_direction != "none") |>
+    select(eval_date, user_id, skill_direction, accuracy, total_posts, p_value)
+}
+
+# Apply rolling assessment
+rolling_skill_results <- map_df(
+  eval_dates$week,
+  ~assess_rolling_skill(.x, sentiment_results),
+  .progress = TRUE
+)
+
+# Save results
+compute_parquet(rolling_skill_results, "data/rolling_skill_results.parquet")
+```

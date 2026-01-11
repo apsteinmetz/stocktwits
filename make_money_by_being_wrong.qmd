@@ -746,3 +746,127 @@ rolling_skill_results <- map_df(
 # Save results
 compute_parquet(rolling_skill_results, "data/rolling_skill_results.parquet")
 ```
+
+```{r load-rolling-skill}
+# Load pre-computed rolling skill results
+# Load pre-computed rolling skill results
+rolling_skill_results <- read_parquet_duckdb("data/rolling_skill_results.parquet")
+
+# Use summarise operations to avoid materialization
+stats <- rolling_skill_results |>
+  summarise(
+    eval_periods = n_distinct(eval_date),
+    total_observations = n(),
+    unique_users = n_distinct(user_id)
+  ) |>
+  collect()
+
+cat("Rolling skill assessment:\n")
+cat("  Evaluation periods:", stats$eval_periods, "\n")
+cat("  Total user-week observations:", stats$total_observations, "\n")
+cat("  Unique skilled users identified:", stats$unique_users, "\n")
+
+# Breakdown by skill type
+skill_breakdown <- rolling_skill_results |>
+  summarise(
+    .by = skill_direction,
+    n = n()
+  ) |>
+  collect() |>
+  mutate(pct = n / sum(n,na.rm = TRUE))
+
+skill_breakdown |>
+  gt() |>
+  tab_header(title = "Skilled User Observations by Type") |>
+  fmt_number(columns = n, decimals = 0) |>
+  fmt_percent(columns = pct, decimals = 1)
+```
+
+```{r rolling-skill-over-time}
+# Track number of skilled users over time
+# Track number of skilled users over time
+skilled_users_over_time <- rolling_skill_results |>
+  summarise(
+    .by = c(eval_date, skill_direction),
+    users = n_distinct(user_id)
+  ) |>
+  collect()
+
+ggplot(skilled_users_over_time, aes(x = eval_date, y = users, 
+                                     color = skill_direction, fill = skill_direction)) +
+  geom_area(alpha = 0.3, position = "identity") +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = c("positive" = "darkgreen", "negative" = "darkred")) +
+  scale_fill_manual(values = c("positive" = "darkgreen", "negative" = "darkred")) +
+  labs(
+    title = "Skilled Users Identified Over Time",
+    subtitle = "Based on 3-month rolling window with statistical significance (p < 0.05)",
+    x = "Evaluation Date",
+    y = "Number of Skilled Users",
+    color = "Skill Type",
+    fill = "Skill Type"
+  )
+```
+
+## Step 5: Trading Strategy Implementation
+
+Now we implement two trading strategies:
+
+1. **Long-Only Strategy**: Only take long positions (buy signals)
+2. **Long-Short Strategy**: Take both long and short positions
+
+Both strategies:
+- Start with $100,000
+- Open positions of $1,000 each
+- Maximum 10 position openings per day
+- Hold SPY when not in other positions
+- Close positions after ~1 week
+- No margin, no transaction costs
+
+```{r prepare-trading-signals, eval=FALSE}
+# Generate trading signals based on rolling skill assessment
+
+# For each sentiment post, check if the user had identified skill in the prior week
+
+# Generate trading signals based on rolling skill assessment
+
+sentiment_results <- read_parquet_duckdb("data/sentiment_results.parquet")
+
+trading_signals <- sentiment_results |>
+  mutate(eval_week = floor_date(date, "week")) |>
+  left_join(
+    rolling_skill_results |> select(eval_date, user_id, skill_direction),
+    by = c("eval_week" = "eval_date", "user_id")
+  ) |>
+  filter(!is.na(skill_direction)) |>
+  mutate(
+    # Generate signal based on user skill and sentiment
+    signal = case_when(
+      skill_direction == "positive" & bullish ~ "buy",
+      skill_direction == "positive" & !bullish ~ "sell",
+      skill_direction == "negative" & bullish ~ "sell",
+      skill_direction == "negative" & !bullish ~ "buy",
+      TRUE ~ "none"
+    )
+  ) |>
+  filter(signal != "none") |>
+  arrange(date, ticker) |>
+  select(date, ticker, user_id, bullish, skill_direction, signal, 
+         price_t0, price_t7, date_t7, stock_return, excess_return)  |>
+  compute_parquet("data/trading_signals.parquet")
+```
+
+```{r load-trading-signals}
+# Load pre-computed trading signals
+trading_signals <- read_rds("data/trading_signals.rds")
+
+cat("Trading signals generated:\n")
+cat("  Total signals:", nrow(trading_signals), "\n")
+cat("  Date range:", format(min(trading_signals$date), "%Y-%m-%d"), "to",
+    format(max(trading_signals$date), "%Y-%m-%d"), "\n")
+
+trading_signals |>
+  count(signal) |>
+  mutate(pct = n / sum(n)) |>
+  kable(digits = 3, caption = "Trading Signal Distribution")
+```

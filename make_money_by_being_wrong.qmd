@@ -332,7 +332,7 @@ gg <- price_volatility |>
     aes(xintercept = volatility),
     color = "blue",
     linetype = "dashed",
-    size = 1
+    linewidth = 1
   ) +
   # log x scale with percentage labels
   scale_x_log10(labels = scales::percent_format(accuracy = 1)) +
@@ -668,6 +668,7 @@ price_chg <- price_chg |>
 # Join sentiments with prices on the post date
 sentiments_with_returns <- sentiments |>
   left_join(price_chg,by = c("ticker", "date")) |> 
+  filter(!is.na(wk_return)) |>
   as_tibble()
 
 
@@ -686,6 +687,7 @@ compute_parquet(sentiment_results, "data/sentiment_results.parquet")
 ```
 
 ```{r rolling-skill-assessment, eval=FALSE}
+sentiment_results <- read_parquet_duckdb("data/sentiment_results.parquet")
 # This is computationally intensive, so we'll save the results
 
 # Get unique weeks for evaluation
@@ -711,8 +713,8 @@ assess_rolling_skill <- function(eval_date, data, min_posts = 10, p_threshold = 
     group_by(user_id) |>
     summarise(
       total_posts = n(),
-      correct = sum(correct),
       accuracy = mean(correct),
+      correct = sum(correct),
       .groups = "drop"
     ) |>
     filter(total_posts >= min_posts)
@@ -748,7 +750,6 @@ compute_parquet(rolling_skill_results, "data/rolling_skill_results.parquet")
 ```
 
 ```{r load-rolling-skill}
-# Load pre-computed rolling skill results
 # Load pre-computed rolling skill results
 rolling_skill_results <- read_parquet_duckdb("data/rolling_skill_results.parquet")
 
@@ -808,6 +809,41 @@ ggplot(skilled_users_over_time, aes(x = eval_date, y = users,
   )
 ```
 
+```{r}
+# show a plot where skilled users over time are shown as a fraction of total active users
+active_users_over_time <- sentiment_results |>
+  mutate(week = floor_date(date, "week")) |>
+  summarise(
+    .by = week,
+    total_active_users = n_distinct(user_id)
+  ) |>
+  collect()
+
+skilled_fraction_over_time <- rolling_skill_results |>
+  summarise(
+    .by = c(eval_date, skill_direction),
+    skilled_users = n_distinct(user_id)
+  ) |>
+  collect() |>
+  left_join(active_users_over_time, by = c("eval_date" = "week")) |>
+  mutate(fraction_skilled = skilled_users / total_active_users)
+
+ggplot(skilled_fraction_over_time, aes(x = eval_date, y = fraction_skilled, 
+                                     color = skill_direction, fill = skill_direction)) +
+  geom_area(alpha = 0.3, position = "identity") +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = c("positive" = "darkgreen", "negative" = "darkred")) +
+  scale_fill_manual(values = c("positive" = "darkgreen", "negative" = "darkred")) +
+  labs(
+    title = "Fraction of Active Users Identified as Skilled Over Time",
+    subtitle = "Based on 3-month rolling window with statistical significance (p < 0.05)",
+    x = "Evaluation Date",
+    y = "Fraction of Active Users",
+    color = "Skill Type",
+    fill = "Skill Type"
+  )
+  
+```
 ## Step 5: Trading Strategy Implementation
 
 Now we implement two trading strategies:
@@ -832,8 +868,16 @@ Both strategies:
 
 sentiment_results <- read_parquet_duckdb("data/sentiment_results.parquet")
 
+week_mapping <- sentiment_results |>
+  distinct(date) |>
+  arrange(date) |>
+  mutate(eval_week = floor_date(date, "week")) 
+
+
 trading_signals <- sentiment_results |>
-  mutate(eval_week = floor_date(date, "week")) |>
+  left_join(week_mapping, by = "date") |>
+  filter(!is.na(excess_return))#  |>
+  # mutate(eval_week = floor_date(date, "week")) |>
   left_join(
     rolling_skill_results |> select(eval_date, user_id, skill_direction),
     by = c("eval_week" = "eval_date", "user_id")

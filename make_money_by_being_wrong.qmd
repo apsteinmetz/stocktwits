@@ -459,7 +459,6 @@ get_win_rate <- function(track_record, abs_or_rel = c("relative", "absolute")) {
       win_rate = sum(win_vs_SPY) / n()
     )
   } else {
-    {
       user_win_rate <- summarise(
         track_record,
         .by = user_id,
@@ -470,9 +469,10 @@ get_win_rate <- function(track_record, abs_or_rel = c("relative", "absolute")) {
     } |>
       arrange(desc(win_rate)) |>
       filter(!is.na(win_rate))
-  }
+  
   return(user_win_rate)
 }
+
 user_win_rate <- get_win_rate(track_record, "relative")
 bear_win_rate <- get_win_rate(track_record_bear, "relative")
 bull_win_rate <- get_win_rate(track_record_bull, "relative")
@@ -811,8 +811,13 @@ ggplot(skilled_users_over_time, aes(x = eval_date, y = users,
 
 ```{r}
 # show a plot where skilled users over time are shown as a fraction of total active users
+weeks <- sentiment_results |>
+  distinct(date) |>
+  arrange(date) |>
+  mutate(week = floor_date(date, "week"))
+
 active_users_over_time <- sentiment_results |>
-  mutate(week = floor_date(date, "week")) |>
+  left_join(weeks, by = "date") |>
   summarise(
     .by = week,
     total_active_users = n_distinct(user_id)
@@ -830,12 +835,14 @@ skilled_fraction_over_time <- rolling_skill_results |>
 
 ggplot(skilled_fraction_over_time, aes(x = eval_date, y = fraction_skilled, 
                                      color = skill_direction, fill = skill_direction)) +
-  geom_area(alpha = 0.3, position = "identity") +
-  geom_line(linewidth = 1) +
+  #geom_area(alpha = 0.3, position = "identity") +
+  #geom_line(linewidth = 1) +
+  geom_smooth(span = .1, se = FALSE) + 
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
   scale_color_manual(values = c("positive" = "darkgreen", "negative" = "darkred")) +
   scale_fill_manual(values = c("positive" = "darkgreen", "negative" = "darkred")) +
   labs(
-    title = "Fraction of Active Users Identified as Skilled Over Time",
+    title = 'Fraction of Stocktwits Users Showing "Skill"',
     subtitle = "Based on 3-month rolling window with statistical significance (p < 0.05)",
     x = "Evaluation Date",
     y = "Fraction of Active Users",

@@ -785,7 +785,6 @@ skill_breakdown |>
 
 ```{r rolling-skill-over-time}
 # Track number of skilled users over time
-# Track number of skilled users over time
 skilled_users_over_time <- rolling_skill_results |>
   summarise(
     .by = c(eval_date, skill_direction),
@@ -811,6 +810,7 @@ ggplot(skilled_users_over_time, aes(x = eval_date, y = users,
 
 ```{r}
 # show a plot where skilled users over time are shown as a fraction of total active users
+sentiment_results <- read_parquet_duckdb("data/sentiment_results.parquet")
 weeks <- sentiment_results |>
   distinct(date) |>
   arrange(date) |>
